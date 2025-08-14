@@ -1,0 +1,20 @@
+# Sample configuration for AI Intern Agent
+jira:
+  url: "https://company.atlassian.net"
+  email: "ai-agent@company.com"
+  api_token: "your-jira-api-token"
+  project_key: "PROJ"
+  transitions:
+    To Do: "11" 
+    In Progress: "21"
+    Done: "31"
+github:
+  token: "your-github-token"
+  owner: "company"
+  repo: "main-repo"
+anthropic:
+  api_key: "your-anthropic-api-key"
+agent:
+  username: "ai-intern"
+  polling_interval: "30s"
+  max_concurrent_tickets: 3
