@@ -1,4 +1,4 @@
-package jira
+package ticketing
 
 type Ticket struct {
 	ID          string

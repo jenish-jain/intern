@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"ai-intern-agent/internal/github/mocks"
+	"intern/internal/github/mocks"
 
 	"go.uber.org/mock/gomock"
 )

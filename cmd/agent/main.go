@@ -1,14 +1,16 @@
 package main
 
 import (
-	"ai-intern-agent/internal/ai"
-	"ai-intern-agent/internal/config"
-	"ai-intern-agent/internal/github"
-	"ai-intern-agent/internal/jira"
-	"ai-intern-agent/internal/orchestrator"
 	"context"
 	"flag"
 	"os"
+
+	"intern/internal/ai"
+	"intern/internal/config"
+	"intern/internal/github"
+	"intern/internal/orchestrator"
+	"intern/internal/ticketing"
+	"intern/internal/ticketing/jira"
 
 	logger "github.com/jenish-jain/logger"
 )
@@ -28,19 +30,26 @@ func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		logger.Error("Failed to load config: %v", err)
+		os.Exit(1)
 	}
 
 	jiraClient, err := jira.NewClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
 	if err != nil {
 		logger.Error("Failed to init JIRA client: %v", err)
+		os.Exit(1)
 	}
 	if err := jiraClient.HealthCheck(context.Background()); err != nil {
 		logger.Error("JIRA health check failed: %v", err)
+		os.Exit(1)
 	}
+
+	// Create ticketing service with JIRA client
+	ticketingSvc := ticketing.NewTicketingService(jiraClient)
 
 	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo)
 	if err := githubClient.HealthCheck(context.Background()); err != nil {
 		logger.Error("GitHub health check failed: %v", err)
+		os.Exit(1)
 	}
 
 	aiClient := ai.NewClient(cfg.AnthropicAPIKey)
@@ -48,7 +57,7 @@ func main() {
 	state := orchestrator.NewState(stateFile)
 	_ = state.Load() // ignore error if file doesn't exist
 
-	coordinator := orchestrator.NewCoordinator(jiraClient, githubClient, aiClient, cfg, state)
+	coordinator := orchestrator.NewCoordinator(ticketingSvc, githubClient, aiClient, cfg, state)
 	logger.Info("Starting AI Intern Agent MVP...")
 	coordinator.Run(context.Background())
 }

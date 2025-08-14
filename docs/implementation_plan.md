@@ -4,7 +4,7 @@
 
 ### 1. Initialize Go Project
 ```
-ai-intern-agent/
+intern/
 ├── cmd/
 │   └── agent/
 │       └── main.go
@@ -37,7 +37,7 @@ ai-intern-agent/
 **Tasks**:
 1. **Initialize Go Module**
    ```bash
-   go mod init ai-intern-agent
+   go mod init intern
    ```
 
 2. **Add Core Dependencies**

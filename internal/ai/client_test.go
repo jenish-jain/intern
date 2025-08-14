@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"ai-intern-agent/internal/ai/mocks"
+	"intern/internal/ai/mocks"
 
 	"go.uber.org/mock/gomock"
 )
