@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 
+	"intern/internal/ai/anthropic"
 	"intern/internal/config"
 	"intern/internal/orchestrator"
 	"intern/internal/repository"
@@ -52,7 +53,8 @@ func main() {
 	state := orchestrator.NewState(stateFile)
 	_ = state.Load() // ignore error if file doesn't exist
 
-	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, cfg, state)
+	agent := anthropic.NewClient(cfg.AnthropicAPIKey)
+	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state)
 	logger.Info("Starting AI Intern Agent MVP...")
 	coordinator.Run(context.Background())
 }

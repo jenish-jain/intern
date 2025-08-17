@@ -18,12 +18,13 @@ import (
 type Coordinator struct {
 	Ticketing  *ticketing.TicketingService
 	Repository *repository.RepositoryService
+	Agent      ai.Agent
 	Cfg        *config.Config
 	State      *State
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, cfg *config.Config, state *State) *Coordinator {
-	return &Coordinator{Ticketing: ticketing, Repository: repository, Cfg: cfg, State: state}
+func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent ai.Agent, cfg *config.Config, state *State) *Coordinator {
+	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state}
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -52,7 +53,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 		}
 	}
 	// Try to switch to base branch before feature work (best-effort)
-	_ = c.Repository.SwitchBranch(ctx, "main")
+	_ = c.Repository.SwitchBranch(ctx, "master")
 
 	for {
 		select {
@@ -60,8 +61,6 @@ func (c *Coordinator) Run(ctx context.Context) {
 			return
 		default:
 			tickets, err := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
-			logger.Debug("fetched tickets from JIRA in coordinator", "tickets", tickets)
-			logger.Debug("error in fetching tickets from JIRA in coordinator", "err", err)
 			if err != nil {
 				logger.Error("Failed to fetch tickets: %v", err)
 				time.Sleep(interval)
@@ -75,8 +74,6 @@ func (c *Coordinator) Run(ctx context.Context) {
 			}
 
 			for _, t := range tickets {
-				logger.Debug("ticket in coordinator", "ticket", t)
-				logger.Debug("state in coordinator", "state", c.State)
 				if c.State.IsProcessed(t.Key) {
 					continue
 				}
@@ -99,8 +96,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 				// Build AI context and plan changes (minimal)
 				repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 				ctxStr := ai.BuildRepoContext(repoRoot, 50, 32*1024)
-				anth := ai.NewAnthropicClient(c.Cfg.AnthropicAPIKey)
-				changes, planErr := anth.PlanChanges(ctx, t.Key, t.Summary, t.Description, ctxStr)
+				changes, planErr := c.Agent.PlanChanges(ctx, t.Key, t.Summary, t.Description, ctxStr)
 				if planErr != nil {
 					logger.Error("AI planning failed: %v", planErr)
 				} else {
@@ -127,6 +123,10 @@ func (c *Coordinator) Run(ctx context.Context) {
 					logger.Error("Failed to create PR: %v", prErr)
 				} else {
 					logger.Info("Created PR: %s", prURL)
+					// Update JIRA status to Done after successful PR creation
+					if err := c.Ticketing.UpdateTicketStatus(ctx, t.Key, "Done", c.Cfg.JiraTransitions); err != nil {
+						logger.Error("Failed to move ticket to Done: %v", err)
+					}
 				}
 
 				logger.Info("Completed basic workflow for ticket %s", t.Key)

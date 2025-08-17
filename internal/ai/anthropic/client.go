@@ -1,4 +1,4 @@
-package ai
+package anthropic
 
 import (
 	"bytes"
@@ -12,34 +12,22 @@ import (
 	"strings"
 	"time"
 
+	"intern/internal/ai"
+
 	"github.com/jenish-jain/logger"
 )
 
-type AnthropicClient struct {
+// Ensure Client implements ai.Agent
+var _ ai.Agent = (*Client)(nil)
+
+type Client struct {
 	APIKey string
 	Model  string
 	HTTP   *http.Client
 }
 
-type codeGenRequest struct {
-	Model     string        `json:"model"`
-	MaxTokens int           `json:"max_tokens"`
-	Messages  []messagePart `json:"messages"`
-}
-
-type messagePart struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type codeGenResponse struct {
-	Content []struct {
-		Text string `json:"text"`
-	} `json:"content"`
-}
-
-func NewAnthropicClient(apiKey string) *AnthropicClient {
-	return &AnthropicClient{
+func NewClient(apiKey string) *Client {
+	return &Client{
 		APIKey: apiKey,
 		Model:  "claude-3-5-sonnet-20240620",
 		HTTP:   &http.Client{Timeout: 60 * time.Second},
@@ -62,7 +50,7 @@ func sanitizeJSON(s string) string {
 }
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
-func (c *AnthropicClient) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]CodeChange, error) {
+func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]ai.CodeChange, error) {
 	prompt := fmt.Sprintf(`You are a senior Go engineer. Output ONLY compact JSON. No markdown.
 Ticket: %s - %s
 Description:
@@ -113,7 +101,7 @@ Output strictly a JSON array, no surrounding text, like:
 		return nil, fmt.Errorf("empty anthropic response")
 	}
 	raw := sanitizeJSON(cg.Content[0].Text)
-	var changes []CodeChange
+	var changes []ai.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
 	}
