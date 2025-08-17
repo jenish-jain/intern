@@ -178,7 +178,7 @@ func (c *githubClient) Commit(ctx context.Context, message string) error {
 
 	_, err = w.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "AI Intern Agent",
+			Name:  "AI Intern",
 			Email: "ai-intern@example.com",
 			When:  time.Now(),
 		},

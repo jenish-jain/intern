@@ -24,7 +24,7 @@ func main() {
 
 	if *initFlag {
 		writeSampleFiles()
-		logger.Info("Sample config.yaml, .env.example, and agent_state.json created.")
+		logger.Info("Sample config.yaml, .env.example, and agent_state.jsonc created.")
 		return
 	}
 
@@ -49,7 +49,7 @@ func main() {
 	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo)
 	repoSvc := repository.NewRepositoryService(githubClient)
 
-	stateFile := "agent_state.json"
+	stateFile := "agent_state.jsonc"
 	state := orchestrator.NewState(stateFile)
 	_ = state.Load() // ignore error if file doesn't exist
 
@@ -84,5 +84,5 @@ BASE_BRANCH="master"
 BRANCH_PREFIX="feature/"
 `), 0644)
 
-	os.WriteFile("agent_state.json", []byte(`{"processed":{}}`), 0644)
+	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)
 }
