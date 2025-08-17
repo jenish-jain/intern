@@ -82,6 +82,11 @@ MAX_CONCURRENT_TICKETS=1
 WORKING_DIR="./workspace"
 BASE_BRANCH="master"
 BRANCH_PREFIX="feature/"
+
+CONTEXT_MAX_FILES=40
+CONTEXT_MAX_BYTES=32
+
+PLAN_MAX_FILES=10
 `), 0644)
 
 	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)

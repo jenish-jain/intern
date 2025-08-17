@@ -129,13 +129,17 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	_ = c.Repository.SwitchBranch(ctx, branchName)
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
-	ctxStr := ai.BuildRepoContext(repoRoot, 30, 32*1024)
+	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
 	logger.Debug("context string", "ctxStr", ctxStr)
 	changes, planErr := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 	if planErr != nil {
 		return fmt.Errorf("AI planning failed: %w", planErr)
 	}
-	for _, ch := range changes {
+	valid, verr := validatePlannedChanges(repoRoot, changes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
+	if verr != nil {
+		return fmt.Errorf("validation failed: %w", verr)
+	}
+	for _, ch := range valid {
 		abs := filepath.Join(repoRoot, ch.Path)
 		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 			return fmt.Errorf("mkdir: %w", err)
@@ -147,7 +151,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			return fmt.Errorf("git add: %w", err)
 		}
 	}
-	if len(changes) > 0 {
+	if len(valid) > 0 {
 		if err := c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): apply planned changes", key)); err != nil {
 			return fmt.Errorf("commit: %w", err)
 		}
@@ -156,7 +160,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if err != nil {
 		logger.Error("status failed: %v", err)
 	}
-	if !changed && len(changes) == 0 {
+	if !changed && len(valid) == 0 {
 		logger.Info("No effective changes for %s; skipping push/PR", key)
 		return nil
 	}
