@@ -9,11 +9,19 @@ intern/
 │   └── agent/
 │       └── main.go
 ├── internal/
-│   ├── jira/
-│   ├── github/
+│   ├── ticketing/
+│   │   └── jira/
+│   ├── repository/
+│   │   └── github/
 │   ├── ai/
-│   ├── analyzer/
+│   │   ├── agent.go
+│   │   ├── context_builder.go
+│   │   ├── types.go
+│   │   └── anthropic/
+│   │       └── client.go
 │   ├── orchestrator/
+│   │   ├── coordinator.go
+│   │   └── branch.go
 │   ├── config/
 │   └── testing/
 ├── pkg/
@@ -44,16 +52,16 @@ intern/
    ```bash
    go get github.com/go-resty/resty/v2          # HTTP client
    go get github.com/google/go-github/v58       # GitHub API
-   go get github.com/andygrunwald/go-jira/v1/v2 # JIRA API
+   go get github.com/andygrunwald/go-jira       # JIRA API
    go get github.com/joho/godotenv              # Environment variables
    go get github.com/sirupsen/logrus            # Logging
    go get github.com/spf13/viper                # Configuration
-   go get gopkg.in/yaml.v3                     # YAML parsing
+   go get gopkg.in/yaml.v3                      # YAML parsing
+   go install go.uber.org/mock/mockgen@latest   # Mocks
    ```
 
 3. **Create Basic Configuration System**
    - `internal/config/config.go` - Configuration struct and loading
-   - `internal/config/validation.go` - Configuration validation
    - `.env.example` - Template for environment variables
 
 **Deliverable**: Working Go project with configuration management
@@ -62,271 +70,238 @@ intern/
 **Goal**: Connect to JIRA and read assigned tickets
 
 **Tasks**:
-1. **Create JIRA Client** (`internal/jira/client.go`)
+1. **JIRA Client** (`internal/ticketing/jira/jira_client.go`)
    - Authentication handling
-   - Basic API connection
-   - Health check functionality
+   - Basic API connection (health check)
+   - Transitions API to move issues across statuses
 
-2. **Ticket Operations** (`internal/jira/tickets.go`)
+2. **Ticket Operations** (`internal/ticketing/service.go`)
    - Get assigned tickets
-   - Update ticket status
-   - Parse ticket descriptions
+   - Update ticket status using transition mapping
 
-3. **Data Structures** (`internal/jira/types.go`)
-   - Ticket struct definition
-   - Priority mapping
-   - Status definitions
+3. **Types** (`internal/ticketing/types.go`)
+   - Ticket struct; fields: key, summary, description, status, priority, etc.
 
-**Deliverable**: Agent can read JIRA tickets assigned to itself
+**Deliverable**: Agent can read and update JIRA tickets
 
 ### Step 3: GitHub Integration
-**Goal**: Basic GitHub repository operations
+**Goal**: Repository operations (local and remote)
 
 **Tasks**:
-1. **GitHub Client Setup** (`internal/github/client.go`)
-   - Authentication with Personal Access Token
-   - Repository access validation
+1. **Repository Client** (`internal/repository/github/client.go`)
+   - Clone repository (go-git)
+   - Sync (pull) with remote
+   - Create/switch branches
+   - Add/commit/push changes
+   - Create PRs (go-github)
+   - Detect local changes (worktree status)
 
-2. **Repository Operations** (`internal/github/repository.go`)
-   - Clone repository
-   - Sync with remote
-   - File system operations
-
-3. **Branch Management** (`internal/github/branches.go`)
-   - Create feature branches
-   - Switch between branches
-   - Branch naming conventions
-
-**Deliverable**: Agent can create branches and manipulate repository files
+**Deliverable**: Branch/commit/PR flow working
 
 ### Step 4: Basic AI Integration
-**Goal**: Connect to Claude API for simple code generation
+**Goal**: Connect to Anthropic API via a facade
 
 **Tasks**:
-1. **Anthropic Client** (`internal/ai/client.go`)
-   - API authentication
-   - Request/response handling
-   - Rate limiting
+1. **AI Facade** (`internal/ai/agent.go`, `internal/ai/types.go`)
+   - `Agent` interface: `PlanChanges(ctx, key, summary, description, context) ([]CodeChange, error)`
+   - `CodeChange` supports `content` and `content_b64`
+2. **Anthropic Provider** (`internal/ai/anthropic/client.go`)
+   - Prompting
+   - JSON-only responses with sanitization (strip fences, base64 decode if present)
+3. **Context Builder** (`internal/ai/context_builder.go`)
+   - Include subset of files (skip binaries, vendor/node_modules)
+   - Configurable limits: file count and bytes per file
 
-2. **Simple Code Generator** (`internal/ai/generator.go`)
-   - Basic file generation
-   - Simple function creation
-   - Template-based generation
+**Deliverable**: Agent can propose code changes via AI
 
-3. **Prompt Engineering** (`internal/ai/prompts.go`)
-   - Code generation prompts
-   - Context building
-   - Response parsing
-
-**Deliverable**: Agent can generate simple code files using AI
-
-### Step 5: Basic Orchestrator
+### Step 5: Coordinator & Pipeline
 **Goal**: Coordinate the basic workflow
 
 **Tasks**:
-1. **Main Coordinator** (`internal/orchestrator/coordinator.go`)
-   - Ticket polling loop
-   - Basic workflow execution
-   - Error handling
+1. **Coordinator** (`internal/orchestrator/coordinator.go`)
+   - Poll tickets
+   - Prepare repo: clone/sync + switch base branch
+   - Per-ticket pipeline: set In Progress → create branch → AI plan → materialize → commit → push → PR → Done
+   - Skip PR if no effective changes
+   - Worker pool honoring `MAX_CONCURRENT_TICKETS`
+2. **Branch Utility** (`internal/orchestrator/branch.go`)
+   - Build sanitized branch names with prefix
 
-2. **State Management** (`internal/orchestrator/state.go`)
-   - Track ticket processing state
-   - Persist progress
-   - Resume capability
+**Deliverable**: End-to-end MVP with PR creation and JIRA updates
 
-**Deliverable**: End-to-end basic workflow working
 
 ## Phase 2: Intelligence (Weeks 3-4)
 
 ### Step 6: Advanced Code Analysis
-**Goal**: Understand existing codebase structure and patterns
+**Goal**: Improve AI context and relevance to reduce hallucinations
 
 **Tasks**:
-1. **Structure Analyzer** (`internal/analyzer/structure.go`)
-   - Parse Go project structure
-   - Identify packages and dependencies
-   - Extract API patterns
+1. **Code Graph & Indexing (Design)**
+   - Build a lightweight index: packages, exported APIs, file-to-package mapping
+   - Extract public functions/method signatures to include in context
+2. **Context Heuristics**
+   - Focus context around paths referenced in the ticket description (heuristics: keywords, file globs)
+   - Include related tests when present
+3. **Configurable Limits**
+   - Move context limits (file count, bytes/file) to config; set defaults (e.g., 40 files, 32KB/file)
 
-2. **Pattern Recognition** (`internal/analyzer/patterns.go`)
-   - Code style analysis
-   - Naming conventions
-   - Architecture patterns
+**Acceptance Criteria**:
+- Context builder produces targeted context slices for typical tickets (<1MB)
+- Unit tests validating inclusion/exclusion behavior
 
-3. **Context Builder** (`internal/analyzer/context.go`)
-   - Build comprehensive codebase context
-   - Summarize relevant code sections
-   - Create AI-friendly context
-
-**Deliverable**: Agent understands codebase structure and conventions
-
-### Step 7: Enhanced AI Code Generation
-**Goal**: Generate context-aware, high-quality code
+### Step 7: Enhanced AI Planning
+**Goal**: Improve planning accuracy and safety
 
 **Tasks**:
-1. **Advanced Generator** (`internal/ai/advanced_generator.go`)
-   - Context-aware code generation
-   - Multi-file changes
-   - Complex logic implementation
+1. **Prompt Templates**
+   - Add provider-agnostic prompt templates with strict JSON requirements
+   - Add system content that emphasizes minimal changes and no markdown
+2. **Validation Layer**
+   - Validate `CodeChange` entries: path traversal guard, writeable directories, non-empty content
+   - Limit number of changed files per ticket (configurable)
+3. **Plan Auditing**
+   - Log summarized plan (file list only) for traceability
 
-2. **Code Reviewer** (`internal/ai/reviewer.go`)
-   - Self-review generated code
-   - Quality assessment
-   - Improvement suggestions
+**Acceptance Criteria**:
+- Plans rejected if they violate path or file limits
+- Plans applied only when valid; unsafe output is skipped with clear logs
 
-3. **Template System** (`internal/ai/templates.go`)
-   - Code templates for common patterns
-   - Customizable generation rules
-   - Framework-specific templates
-
-**Deliverable**: Agent generates high-quality, contextually appropriate code
-
-### Step 8: Testing Integration
-**Goal**: Automated testing of generated code
+### Step 8: Testing & Quality Gates
+**Goal**: Add gates before PR
 
 **Tasks**:
-1. **Test Runner** (`internal/testing/runner.go`)
-   - Execute unit tests
-   - Parse test results
-   - Generate test reports
+1. **Hooks**
+   - Optional: run `go vet`, `go test ./...` before commit/push (config flag)
+   - Optional linters (gofumpt/golangci-lint) if configured
+2. **PR Template**
+   - Autogenerate PR body with: ticket key, summary, file list, any test results
 
-2. **Quality Checker** (`internal/testing/quality.go`)
-   - Code formatting validation
-   - Basic security checks
-   - Performance analysis
+**Acceptance Criteria**:
+- When enabled, PRs include test/quality summaries
+- Fail-fast: do not push/PR on test failure when gate is enabled
 
-**Deliverable**: Agent validates generated code through automated testing
-
-### Step 9: Pull Request Management
-**Goal**: Create comprehensive pull requests
+### Step 9: Robustness & Backoff
+**Goal**: Improve resilience on network/API errors
 
 **Tasks**:
-1. **PR Creator** (`internal/github/pullrequests.go`)
-   - Create detailed PR descriptions
-   - Link to JIRA tickets
-   - Add relevant reviewers
+1. **Backoff & Retry**
+   - Add exponential backoff with jitter for JIRA, GitHub, and Anthropic calls (configurable max retries)
+2. **Error Taxonomy**
+   - Classify errors: transient vs. permanent
+   - Skip vs. retry decisions documented and implemented
 
-2. **Commit Management** (`internal/github/commits.go`)
-   - Meaningful commit messages
-   - Atomic commits
-   - Conventional commit format
+**Acceptance Criteria**:
+- Transient failures retry within limits; permanent failures logged with context
+- Unit tests for retry policy behavior
 
-**Deliverable**: Agent creates professional pull requests with detailed descriptions
 
 ## Phase 3: Autonomy (Weeks 5-6)
 
-### Step 10: Advanced Priority Management
-**Goal**: Intelligent ticket prioritization and resource allocation
+### Step 10: Priority & Scheduling
+**Goal**: Intelligent ticket prioritization and controlled concurrency
 
 **Tasks**:
-1. **Priority Engine** (`internal/orchestrator/prioritizer.go`)
-   - Multi-factor priority scoring
-   - Dependency analysis
-   - Resource allocation
+1. **Priority Engine**
+   - Extend ticket model with priority scoring from JIRA fields
+   - Sort queue using weighted priority + recency + size (estimated by plan file count)
+2. **Concurrency Controls**
+   - Per-repo mutex: prevent concurrent writes to the same repo/branch
+   - Rate limiters for remote APIs
 
-2. **Concurrency Manager** (`internal/orchestrator/concurrency.go`)
-   - Parallel ticket processing
-   - Resource locking
-   - Conflict prevention
+**Acceptance Criteria**:
+- No concurrent conflicting operations on the same repo
+- High-priority tickets generally processed first
 
-**Deliverable**: Agent optimally prioritizes and processes multiple tickets
-
-### Step 11: Error Handling & Recovery
-**Goal**: Robust error handling and self-healing capabilities
-
-**Tasks**:
-1. **Error Handler** (`internal/orchestrator/error_handler.go`)
-   - Categorize errors
-   - Retry strategies
-   - Escalation procedures
-
-2. **Recovery System** (`internal/orchestrator/recovery.go`)
-   - Automatic error recovery
-   - State restoration
-   - Partial progress preservation
-
-**Deliverable**: Agent handles errors gracefully and recovers automatically
-
-### Step 12: Monitoring & Reporting
-**Goal**: Comprehensive monitoring and reporting system
+### Step 11: State Machine & Recovery
+**Goal**: Introduce formal states and recoverability
 
 **Tasks**:
-1. **Metrics Collector** (`internal/monitoring/metrics.go`)
-   - Performance metrics
-   - Success/failure rates
-   - Processing times
+1. **State Machine**
+   - States per ticket: `Queued → Planning → Applying → Testing → PRCreated → Done | Failed`
+   - Persist state and last action timestamp in agent state file (JSON)
+2. **Recovery**
+   - On startup, resume non-terminal tickets from last state
+   - Idempotent operations: skip work already done (branch exists, PR exists)
 
-2. **Reporter** (`internal/monitoring/reporter.go`)
-   - Daily/weekly reports
-   - Performance dashboards
-   - Alert notifications
+**Acceptance Criteria**:
+- Restarting agent resumes work without duplication
+- State transitions logged; invalid transitions prevented
 
-**Deliverable**: Agent provides comprehensive reporting and monitoring
+### Step 12: Observability & Reporting
+**Goal**: Metrics and reporting
+
+**Tasks**:
+1. **Metrics**
+   - Counters: tickets processed, PRs created, retries, failures
+   - Timings: ticket processing time
+2. **Reporting**
+   - Summary logs per day/run; optional structured export (JSON)
+
+**Acceptance Criteria**:
+- Basic metrics visible in logs; optional export endpoint/design
+
 
 ## Implementation Checklist
 
-### Pre-Development Setup
-- [ ] Set up development environment
-- [ ] Create GitHub repository
-- [ ] Set up JIRA test project
-- [ ] Obtain API keys (JIRA, GitHub, Anthropic)
-- [ ] Create test tickets in JIRA
-
 ### Phase 1 Checklist
-- [ ] Go project initialization
-- [ ] Basic configuration system
-- [ ] JIRA client and ticket reading
-- [ ] GitHub client and repository operations
-- [ ] Basic AI code generation
-- [ ] Simple orchestrator workflow
-- [ ] End-to-end MVP testing
+- [x] Go project initialization
+- [x] Basic configuration system
+- [x] JIRA client and ticket reading/updating
+- [x] GitHub client and repository operations
+- [x] AI code planning (Anthropic)
+- [x] Orchestrator workflow with worker pool
+- [x] PR creation and JIRA Done update
 
 ### Phase 2 Checklist
-- [ ] Code structure analysis
-- [ ] Pattern recognition
-- [ ] Context-aware code generation
-- [ ] Code review capabilities
-- [ ] Automated testing integration
-- [ ] Enhanced PR creation
-- [ ] Quality assurance measures
+- [ ] Advanced context builder (graph/index and heuristics)
+- [ ] Provider-agnostic prompt templates and validation
+- [ ] Testing/quality gates and PR template generation
+- [ ] Backoff/retry policies with error taxonomy
 
 ### Phase 3 Checklist
-- [ ] Advanced priority management
-- [ ] Concurrency handling
-- [ ] Error recovery systems
-- [ ] Monitoring implementation
-- [ ] Performance optimization
-- [ ] Documentation completion
-- [ ] Production readiness assessment
+- [ ] Priority engine and improved scheduling
+- [ ] Per-repo locking and rate limiting
+- [ ] State machine with recovery and idempotency
+- [ ] Observability metrics and reporting
+
 
 ## Development Best Practices
 
 ### Code Quality
-- Write comprehensive unit tests for each module
-- Use Go interfaces for all external dependencies
-- Implement proper error handling throughout
-- Follow Go coding conventions and best practices
-- Use dependency injection for testability
+- Interface-first design; inject dependencies
+- Keep functions small; pipeline-style orchestration
+- Never ignore errors; log actionable context
 
 ### Security Considerations
-- Secure API key storage and handling
-- Validate all external inputs
-- Implement proper authentication and authorization
-- Log security-relevant events
-- Regular dependency updates
+- Never log secrets
+- Guard against path traversal in file writes
+- Minimal privileges for tokens
 
 ### Performance Optimization
-- Implement proper rate limiting for external APIs
-- Use connection pooling where appropriate
-- Optimize memory usage for large codebases
-- Implement caching for frequently accessed data
-- Monitor and profile performance regularly
+- Rate limit remote APIs
+- Limit AI context (file count/bytes)
+- Cache repository context inputs when feasible
 
 ### Testing Strategy
-- Unit tests for all business logic
-- Integration tests for external API interactions
-- End-to-end tests for complete workflows
-- Mock external dependencies for isolated testing
-- Continuous integration with automated testing
+- Unit tests for business logic and clients
+- Mocks for external calls
+- Optional gates before PRs (`go test`, lint)
 
-This plan provides a structured approach to building your AI Intern Agent, with clear milestones and deliverables for each phase. Each step builds upon the previous ones, ensuring a solid foundation while progressively adding more sophisticated capabilities.
+
+## AI Prompting Notes (Appendix)
+
+- Always request JSON-only output and provide a strict schema
+- Instruct model to use `content_b64` for complex content
+- Reject/skip plans that contain invalid paths, excessive files, or exceed limits
+
+
+## Configuration Additions (Appendix)
+
+- `WORKING_DIR` (default `./workspace`)
+- `BASE_BRANCH` (default `main`)
+- `BRANCH_PREFIX` (e.g., `feature`)
+- Future: `CONTEXT_MAX_FILES`, `CONTEXT_MAX_BYTES`, `RETRY_MAX_ATTEMPTS`
+
+
+This updated plan reflects the current codebase (Phase 1 complete) and provides detailed, AI-agent-friendly tasks for Phase 2 and Phase 3 to improve accuracy, reliability, and maintainability. The plan emphasizes interface-driven design, robust error handling, and controlled concurrency for safe autonomous operation.
 
