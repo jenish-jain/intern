@@ -8,11 +8,11 @@ import (
 var nonAlnum = regexp.MustCompile(`[^a-z0-9\-]+`)
 
 func buildBranchName(prefix, ticketKey string) string {
-	base := strings.ToLower(ticketKey)
+	base := ticketKey
 	slug := strings.ReplaceAll(base, " ", "-")
 	slug = nonAlnum.ReplaceAllString(slug, "")
 	if len(slug) > 30 {
 		slug = slug[:30]
 	}
-	return prefix + "-" + strings.Trim(slug, "-")
+	return prefix + "/" + strings.Trim(slug, "-")
 }
