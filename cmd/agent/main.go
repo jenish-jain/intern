@@ -7,8 +7,9 @@ import (
 
 	"intern/internal/ai"
 	"intern/internal/config"
-	"intern/internal/github"
 	"intern/internal/orchestrator"
+	"intern/internal/repository"
+	"intern/internal/repository/github"
 	"intern/internal/ticketing"
 	"intern/internal/ticketing/jira"
 
@@ -43,21 +44,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create ticketing service with JIRA client
 	ticketingSvc := ticketing.NewTicketingService(jiraClient)
 
 	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo)
-	if err := githubClient.HealthCheck(context.Background()); err != nil {
-		logger.Error("GitHub health check failed: %v", err)
-		os.Exit(1)
-	}
+	// No direct health check on githubClient as it's now wrapped by repository.RepositoryService
+	// and its health check will be done through the interface if needed.
+
+	repoSvc := repository.NewRepositoryService(githubClient)
 
 	aiClient := ai.NewClient(cfg.AnthropicAPIKey)
 	stateFile := "agent_state.json"
 	state := orchestrator.NewState(stateFile)
 	_ = state.Load() // ignore error if file doesn't exist
 
-	coordinator := orchestrator.NewCoordinator(ticketingSvc, githubClient, aiClient, cfg, state)
+	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, aiClient, cfg, state)
 	logger.Info("Starting AI Intern Agent MVP...")
 	coordinator.Run(context.Background())
 }

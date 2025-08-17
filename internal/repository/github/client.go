@@ -7,27 +7,16 @@ import (
 	"path/filepath"
 	"time"
 
+	"intern/internal/repository"
+
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	gh "github.com/google/go-github/v58/github"
 	"golang.org/x/oauth2"
 )
-
-type Client interface {
-	HealthCheck(ctx context.Context) error
-	Raw() *gh.Client
-	// Methods implementing repository.RepositoryClient
-	CloneRepository(ctx context.Context, destPath string) error
-	SyncWithRemote(ctx context.Context) error
-	ListFiles(ctx context.Context, path string) ([]string, error)
-	CreateBranch(ctx context.Context, branchName string) error
-	SwitchBranch(ctx context.Context, branchName string) error
-	AddFile(ctx context.Context, filePath string) error
-	Commit(ctx context.Context, message string) error
-	Push(ctx context.Context, branchName string) error
-}
 
 type githubClient struct {
 	ghClient *gh.Client
@@ -36,7 +25,7 @@ type githubClient struct {
 	token    string // Store the token for git operations
 }
 
-func NewClient(token, owner, repo string) Client {
+func NewClient(token, owner, repo string) repository.RepositoryClient {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	client := gh.NewClient(oauth2.NewClient(context.Background(), ts))
 	return &githubClient{
@@ -207,14 +196,50 @@ func (c *githubClient) Push(ctx context.Context, branchName string) error {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
 	}
 
+	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
 	err = repo.PushContext(ctx, &git.PushOptions{
-		Auth: &http.BasicAuth{Username: c.token, Password: ""},
-		RefSpecs: []git.RefSpec{
-			git.RefSpec(fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)),
-		},
+		Auth:     &http.BasicAuth{Username: c.token, Password: ""},
+		RefSpecs: []config.RefSpec{config.RefSpec(refspec)},
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("failed to push to remote: %w", err)
 	}
 	return nil
+}
+
+func (c *githubClient) CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error) {
+	// Determine a valid base branch: prefer provided, else repo default
+	base := baseBranch
+	if base == "" {
+		repo, _, err := c.ghClient.Repositories.Get(ctx, c.owner, c.repo)
+		if err == nil && repo != nil && repo.GetDefaultBranch() != "" {
+			base = repo.GetDefaultBranch()
+		}
+	}
+	// If still empty or invalid, try to validate/fallback
+	if base == "" {
+		base = "main"
+	}
+	// Validate base exists; if not, fallback to repo default if available
+	if _, _, err := c.ghClient.Git.GetRef(ctx, c.owner, c.repo, fmt.Sprintf("refs/heads/%s", base)); err != nil {
+		repo, _, rerr := c.ghClient.Repositories.Get(ctx, c.owner, c.repo)
+		if rerr == nil && repo != nil && repo.GetDefaultBranch() != "" {
+			base = repo.GetDefaultBranch()
+		}
+	}
+
+	newPR := &gh.NewPullRequest{
+		Title: gh.String(title),
+		Head:  gh.String(headBranch),
+		Base:  gh.String(base),
+		Body:  gh.String(body),
+	}
+	pr, _, err := c.ghClient.PullRequests.Create(ctx, c.owner, c.repo, newPR)
+	if err != nil {
+		return "", fmt.Errorf("failed to create pull request: %w", err)
+	}
+	if pr == nil || pr.GetHTMLURL() == "" {
+		return "", fmt.Errorf("pull request created but URL missing")
+	}
+	return pr.GetHTMLURL(), nil
 }
