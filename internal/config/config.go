@@ -23,6 +23,10 @@ type Config struct {
 	AgentUsername        string
 	PollingInterval      string
 	MaxConcurrentTickets int
+
+	WorkingDir   string
+	BaseBranch   string
+	BranchPrefix string
 }
 
 func LoadConfig() (*Config, error) {
@@ -49,6 +53,10 @@ func LoadConfig() (*Config, error) {
 		AgentUsername:        viper.GetString("AGENT_USERNAME"),
 		PollingInterval:      viper.GetString("POLLING_INTERVAL"),
 		MaxConcurrentTickets: viper.GetInt("MAX_CONCURRENT_TICKETS"),
+
+		WorkingDir:   viper.GetString("WORKING_DIR"),
+		BaseBranch:   viper.GetString("BASE_BRANCH"),
+		BranchPrefix: viper.GetString("BRANCH_PREFIX"),
 	}
 
 	if err := cfg.Validate(); err != nil {

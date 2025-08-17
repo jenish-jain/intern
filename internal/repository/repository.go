@@ -14,6 +14,7 @@ type RepositoryClient interface {
 	Commit(ctx context.Context, message string) error
 	Push(ctx context.Context, branchName string) error
 	CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error)
+	HasLocalChanges(ctx context.Context) (bool, error)
 }
 
 type RepositoryService struct {
@@ -58,4 +59,8 @@ func (r *RepositoryService) Push(ctx context.Context, branchName string) error {
 
 func (r *RepositoryService) CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error) {
 	return r.Client.CreatePullRequest(ctx, baseBranch, headBranch, title, body)
+}
+
+func (r *RepositoryService) HasLocalChanges(ctx context.Context) (bool, error) {
+	return r.Client.HasLocalChanges(ctx)
 }
