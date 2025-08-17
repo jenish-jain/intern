@@ -18,13 +18,12 @@ import (
 type Coordinator struct {
 	Ticketing  *ticketing.TicketingService
 	Repository *repository.RepositoryService
-	AI         ai.Client
 	Cfg        *config.Config
 	State      *State
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, ai ai.Client, cfg *config.Config, state *State) *Coordinator {
-	return &Coordinator{Ticketing: ticketing, Repository: repository, AI: ai, Cfg: cfg, State: state}
+func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, cfg *config.Config, state *State) *Coordinator {
+	return &Coordinator{Ticketing: ticketing, Repository: repository, Cfg: cfg, State: state}
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -104,11 +103,6 @@ func (c *Coordinator) Run(ctx context.Context) {
 				changes, planErr := anth.PlanChanges(ctx, t.Key, t.Summary, t.Description, ctxStr)
 				if planErr != nil {
 					logger.Error("AI planning failed: %v", planErr)
-					// Fallback: create dummy file so branch isn't empty
-					dummyFilePath := filepath.Join(repoRoot, "test.md")
-					_ = os.WriteFile(dummyFilePath, []byte(fmt.Sprintf("This is a test file for ticket %s", t.Key)), 0644)
-					_ = c.Repository.AddFile(ctx, "test.md")
-					_ = c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): add test.md", t.Key))
 				} else {
 					// Materialize changes
 					for _, ch := range changes {
