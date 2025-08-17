@@ -97,15 +97,30 @@ func (c *Coordinator) Run(ctx context.Context) {
 				}
 				_ = c.Repository.SwitchBranch(ctx, branchName) // Ignore error for now
 
-				// Create a dummy file
-				dummyFilePath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo, "test.md")
-				_ = os.WriteFile(dummyFilePath, []byte(fmt.Sprintf("This is a test file for ticket %s", t.Key)), 0644)
-				logger.Info("Added dummy file %s", dummyFilePath)
-
-				// Add file and commit
-				_ = c.Repository.AddFile(ctx, "test.md") // Add file relative to repo root
-				commitMessage := fmt.Sprintf("feat(%s): Add dummy file for %s", t.Key, t.Key)
-				_ = c.Repository.Commit(ctx, commitMessage)
+				// Build AI context and plan changes (minimal)
+				repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
+				ctxStr := ai.BuildRepoContext(repoRoot, 50, 32*1024)
+				anth := ai.NewAnthropicClient(c.Cfg.AnthropicAPIKey)
+				changes, planErr := anth.PlanChanges(ctx, t.Key, t.Summary, t.Description, ctxStr)
+				if planErr != nil {
+					logger.Error("AI planning failed: %v", planErr)
+					// Fallback: create dummy file so branch isn't empty
+					dummyFilePath := filepath.Join(repoRoot, "test.md")
+					_ = os.WriteFile(dummyFilePath, []byte(fmt.Sprintf("This is a test file for ticket %s", t.Key)), 0644)
+					_ = c.Repository.AddFile(ctx, "test.md")
+					_ = c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): add test.md", t.Key))
+				} else {
+					// Materialize changes
+					for _, ch := range changes {
+						abs := filepath.Join(repoRoot, ch.Path)
+						// Ensure parent dir
+						_ = os.MkdirAll(filepath.Dir(abs), 0755)
+						// Write full content
+						_ = os.WriteFile(abs, []byte(ch.Content), 0644)
+						_ = c.Repository.AddFile(ctx, ch.Path)
+					}
+					_ = c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): apply planned changes", t.Key))
+				}
 
 				// Push the branch
 				_ = c.Repository.Push(ctx, branchName)
