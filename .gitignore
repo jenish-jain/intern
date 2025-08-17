@@ -10,12 +10,14 @@
 
 # Test binary, built with `go test -c`
 *.test
+bin
 
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
 *.coverprofile
 profile.cov
+workspace
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
@@ -30,5 +32,5 @@ go.work.sum
 agent_state.json
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
