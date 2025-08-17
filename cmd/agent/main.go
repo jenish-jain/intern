@@ -77,7 +77,11 @@ ANTHROPIC_API_KEY="your-anthropic-api-key"
 
 AGENT_USERNAME="ai-intern"
 POLLING_INTERVAL="30s"
-MAX_CONCURRENT_TICKETS=3
+MAX_CONCURRENT_TICKETS=1
+
+WORKING_DIR="./workspace"
+BASE_BRANCH="master"
+BRANCH_PREFIX="feature/"
 `), 0644)
 
 	os.WriteFile("agent_state.json", []byte(`{"processed":{}}`), 0644)

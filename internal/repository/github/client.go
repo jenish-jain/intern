@@ -218,7 +218,7 @@ func (c *githubClient) CreatePullRequest(ctx context.Context, baseBranch, headBr
 	}
 	// If still empty or invalid, try to validate/fallback
 	if base == "" {
-		base = "main"
+		base = "master"
 	}
 	// Validate base exists; if not, fallback to repo default if available
 	if _, _, err := c.ghClient.Git.GetRef(ctx, c.owner, c.repo, fmt.Sprintf("refs/heads/%s", base)); err != nil {
@@ -242,4 +242,21 @@ func (c *githubClient) CreatePullRequest(ctx context.Context, baseBranch, headBr
 		return "", fmt.Errorf("pull request created but URL missing")
 	}
 	return pr.GetHTMLURL(), nil
+}
+
+func (c *githubClient) HasLocalChanges(ctx context.Context) (bool, error) {
+	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
+	}
+	w, err := repo.Worktree()
+	if err != nil {
+		return false, fmt.Errorf("failed to get worktree: %w", err)
+	}
+	st, err := w.Status()
+	if err != nil {
+		return false, fmt.Errorf("failed to get status: %w", err)
+	}
+	return !st.IsClean(), nil
 }
