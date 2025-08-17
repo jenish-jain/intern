@@ -129,7 +129,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	_ = c.Repository.SwitchBranch(ctx, branchName)
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
-	ctxStr := ai.BuildRepoContext(repoRoot, 30, 32*1024)
+	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
 	logger.Debug("context string", "ctxStr", ctxStr)
 	changes, planErr := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 	if planErr != nil {

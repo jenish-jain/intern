@@ -27,6 +27,9 @@ type Config struct {
 	WorkingDir   string
 	BaseBranch   string
 	BranchPrefix string
+
+	ContextMaxFiles int
+	ContextMaxBytes int
 }
 
 func LoadConfig() (*Config, error) {
@@ -57,6 +60,17 @@ func LoadConfig() (*Config, error) {
 		WorkingDir:   viper.GetString("WORKING_DIR"),
 		BaseBranch:   viper.GetString("BASE_BRANCH"),
 		BranchPrefix: viper.GetString("BRANCH_PREFIX"),
+
+		ContextMaxFiles: viper.GetInt("CONTEXT_MAX_FILES"),
+		ContextMaxBytes: viper.GetInt("CONTEXT_MAX_BYTES"),
+	}
+
+	// Set safe defaults if unset
+	if cfg.ContextMaxFiles <= 0 {
+		cfg.ContextMaxFiles = 40
+	}
+	if cfg.ContextMaxBytes <= 0 {
+		cfg.ContextMaxBytes = 32 * 1024
 	}
 
 	if err := cfg.Validate(); err != nil {
