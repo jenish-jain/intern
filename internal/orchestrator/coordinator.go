@@ -41,21 +41,18 @@ func (c *Coordinator) Run(ctx context.Context) {
 	_ = os.MkdirAll(workingDir, 0755)
 	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
 
-	if err := c.prepareRepository(ctx); err != nil {
-		logger.Error("Repository preparation failed: %v", err)
-		return
-	}
-
-	maxWorkers := c.Cfg.MaxConcurrentTickets
-	if maxWorkers <= 0 {
-		maxWorkers = 1
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+			// Ensure local repo is up to date before each cycle
+			if err := c.prepareRepository(ctx); err != nil {
+				logger.Error("Repository preparation failed: %v", err)
+				backoffSleep(interval)
+				continue
+			}
+
 			tickets, err := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
 			if err != nil {
 				logger.Error("Failed to fetch tickets: %v", err)
@@ -68,7 +65,10 @@ func (c *Coordinator) Run(ctx context.Context) {
 				continue
 			}
 
-			// Worker pool
+			maxWorkers := c.Cfg.MaxConcurrentTickets
+			if maxWorkers <= 0 {
+				maxWorkers = 1
+			}
 			sem := make(chan struct{}, maxWorkers)
 			var wg sync.WaitGroup
 			for _, t := range tickets {
@@ -108,17 +108,15 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 		if err := c.Repository.CloneRepository(ctx, repoPath); err != nil {
 			return err
 		}
-	} else {
-		logger.Info("Syncing repository...")
-		if err := c.Repository.SyncWithRemote(ctx); err != nil {
-			logger.Error("Sync failed: %v", err)
-		}
 	}
 	base := c.Cfg.BaseBranch
 	if base == "" {
-		base = "master"
+		base = "main"
 	}
 	_ = c.Repository.SwitchBranch(ctx, base)
+	if err := c.Repository.SyncWithRemote(ctx); err != nil {
+		logger.Error("Sync failed: %v", err)
+	}
 	return nil
 }
 
@@ -132,6 +130,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 	ctxStr := ai.BuildRepoContext(repoRoot, 30, 32*1024)
+	logger.Debug("context string", "ctxStr", ctxStr)
 	changes, planErr := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 	if planErr != nil {
 		return fmt.Errorf("AI planning failed: %w", planErr)
