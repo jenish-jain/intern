@@ -33,7 +33,7 @@ type Config struct {
 	ContextMaxBytes int
 
 	PlanMaxFiles     int
-	AllowedWriteDirs []string
+	AllowedWriteDirs []string // TODO: add to config
 }
 
 func LoadConfig() (*Config, error) {

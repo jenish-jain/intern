@@ -169,10 +169,10 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	base := c.Cfg.BaseBranch
 	if base == "" {
-		base = "master"
+		base = "main"
 	}
-	title := fmt.Sprintf("%s: %s", key, summary)
-	body := fmt.Sprintf("Automated changes for %s\n\nTicket: %s\n\nDescription:\n%s", key, key, description)
+	title := buildPRTitle(key, summary)
+	body := buildPRBody(key, summary, description, valid, nil)
 	prURL, prErr := c.Repository.CreatePullRequest(ctx, base, branchName, title, body)
 	if prErr != nil {
 		return fmt.Errorf("create PR: %w", prErr)
