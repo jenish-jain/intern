@@ -53,7 +53,18 @@ func (c *Coordinator) Run(ctx context.Context) {
 				continue
 			}
 
-			tickets, err := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
+			tickets, err := func() ([]ticketing.Ticket, error) {
+				var out []ticketing.Ticket
+				err := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+					t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
+					if e != nil {
+						return MakeTransient(e)
+					}
+					out = t
+					return nil
+				})
+				return out, err
+			}()
 			if err != nil {
 				logger.Error("Failed to fetch tickets: %v", err)
 				backoffSleep(interval)
@@ -130,8 +141,15 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
-	logger.Debug("context string", "ctxStr", ctxStr)
-	changes, planErr := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
+	var changes []ai.CodeChange
+	planErr := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
+		if e != nil {
+			return MakeTransient(e)
+		}
+		changes = ch
+		return nil
+	})
 	if planErr != nil {
 		return fmt.Errorf("AI planning failed: %w", planErr)
 	}
@@ -173,7 +191,15 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	title := buildPRTitle(key, summary)
 	body := buildPRBody(key, summary, description, valid, nil)
-	prURL, prErr := c.Repository.CreatePullRequest(ctx, base, branchName, title, body)
+	var prURL string
+	prErr := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+		u, e := c.Repository.CreatePullRequest(ctx, base, branchName, title, body)
+		if e != nil {
+			return MakeTransient(e)
+		}
+		prURL = u
+		return nil
+	})
 	if prErr != nil {
 		return fmt.Errorf("create PR: %w", prErr)
 	}
