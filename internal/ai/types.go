@@ -8,7 +8,8 @@ const (
 )
 
 type CodeChange struct {
-	Path      string              `json:"path"`
-	Operation CodeChangeOperation `json:"operation"`
-	Content   string              `json:"content"`
+	Path       string              `json:"path"`
+	Operation  CodeChangeOperation `json:"operation"`
+	Content    string              `json:"content,omitempty"`
+	ContentB64 string              `json:"content_b64,omitempty"`
 }

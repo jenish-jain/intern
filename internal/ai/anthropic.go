@@ -3,11 +3,16 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
+
+	"github.com/jenish-jain/logger"
 )
 
 type AnthropicClient struct {
@@ -41,9 +46,24 @@ func NewAnthropicClient(apiKey string) *AnthropicClient {
 	}
 }
 
+// sanitizeJSON tries to strip code fences and extract the JSON array
+func sanitizeJSON(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```JSON")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+	// Extract first JSON array if extra text present
+	re := regexp.MustCompile(`(?s)\[.*\]`)
+	if m := re.FindString(s); m != "" {
+		return m
+	}
+	return s
+}
+
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
 func (c *AnthropicClient) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]CodeChange, error) {
-	prompt := fmt.Sprintf(`You are a senior Go engineer. Follow instructions exactly.
+	prompt := fmt.Sprintf(`You are a senior Go engineer. Output ONLY compact JSON. No markdown.
 Ticket: %s - %s
 Description:
 %s
@@ -51,11 +71,15 @@ Description:
 Repository context (truncated):
 %s
 
-Strictly output a JSON array of code changes with shape:
+Output strictly a JSON array, no surrounding text, like:
 [
-  {"path":"relative/path.ext","operation":"create|update","content":"file content or full updated content"}
+  {"path":"relative/path.ext","operation":"create|update","content":"file content"}
 ]
-Do not include explanations, markdown, or comments. Only JSON. Only the minimal changes required by the description.`, ticketKey, ticketSummary, ticketDescription, repoContext)
+- If content has quotes/newlines, escape properly per JSON.
+- Alternatively you MAY use {"content_b64":"<base64>"} to avoid escaping.
+- Only include files required by the description.`, ticketKey, ticketSummary, ticketDescription, repoContext)
+
+	logger.Debug("prompt in anthropic", "prompt", prompt)
 
 	reqBody := codeGenRequest{
 		Model:     c.Model,
@@ -88,10 +112,19 @@ Do not include explanations, markdown, or comments. Only JSON. Only the minimal 
 	if len(cg.Content) == 0 {
 		return nil, fmt.Errorf("empty anthropic response")
 	}
-	raw := cg.Content[0].Text
+	raw := sanitizeJSON(cg.Content[0].Text)
 	var changes []CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
+	}
+	// Decode base64 content if provided
+	for i := range changes {
+		if changes[i].Content == "" && changes[i].ContentB64 != "" {
+			data, derr := base64.StdEncoding.DecodeString(changes[i].ContentB64)
+			if derr == nil {
+				changes[i].Content = string(data)
+			}
+		}
 	}
 	return changes, nil
 }
