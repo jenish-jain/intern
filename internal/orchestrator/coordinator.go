@@ -22,10 +22,11 @@ type Coordinator struct {
 	Agent      ai.Agent
 	Cfg        *config.Config
 	State      *State
+	Metrics    *Metrics
 }
 
 func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent ai.Agent, cfg *config.Config, state *State) *Coordinator {
-	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state}
+	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics()}
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -55,7 +56,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 
 			tickets, err := func() ([]ticketing.Ticket, error) {
 				var out []ticketing.Ticket
-				err := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+				err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 					t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
 					if e != nil {
 						return MakeTransient(e)
@@ -63,6 +64,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 					out = t
 					return nil
 				})
+				c.Metrics.AddRetries(attempts)
 				return out, err
 			}()
 			if err != nil {
@@ -99,6 +101,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 				}(t.Key, t.Summary, t.Description)
 			}
 			wg.Wait()
+			// log metrics summary
+			s := c.Metrics.Snapshot()
+			logger.Info("Run summary: tickets", s.TicketsProcessed, " prs =", s.PRsCreated, "retries = ", s.Retries, "Api failures =", s.AIPlanFailures)
 			time.Sleep(interval)
 		}
 	}
@@ -142,7 +147,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
 	var changes []ai.CodeChange
-	planErr := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+	planErr, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 		if e != nil {
 			return MakeTransient(e)
@@ -150,7 +155,9 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		changes = ch
 		return nil
 	})
+	c.Metrics.AddRetries(attempts)
 	if planErr != nil {
+		c.Metrics.IncAIPlanFailures()
 		return fmt.Errorf("AI planning failed: %w", planErr)
 	}
 	valid, verr := validatePlannedChanges(repoRoot, changes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
@@ -182,6 +189,13 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		logger.Info("No effective changes for %s; skipping push/PR", key)
 		return nil
 	}
+	// quality gates before push/PR
+	// reuse existing repoRoot
+	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
+	if !ok {
+		logger.Error("Quality gates failed; skipping push/PR for %s", key)
+		return nil
+	}
 	if err := c.Repository.Push(ctx, branchName); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
@@ -190,9 +204,9 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		base = "main"
 	}
 	title := buildPRTitle(key, summary)
-	body := buildPRBody(key, summary, description, valid, nil)
+	body := buildPRBody(key, summary, description, valid, notes)
 	var prURL string
-	prErr := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+	prErr, prAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		u, e := c.Repository.CreatePullRequest(ctx, base, branchName, title, body)
 		if e != nil {
 			return MakeTransient(e)
@@ -200,13 +214,16 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		prURL = u
 		return nil
 	})
+	c.Metrics.AddRetries(prAttempts)
 	if prErr != nil {
 		return fmt.Errorf("create PR: %w", prErr)
 	}
 	logger.Info("Created PR: %s", prURL)
+	c.Metrics.IncPRsCreated()
 	// Mark Done
 	if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
 		logger.Error("Failed to move ticket to Done: %v", err)
 	}
+	c.Metrics.IncTicketsProcessed()
 	return nil
 }

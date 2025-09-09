@@ -25,22 +25,25 @@ func (b BackoffConfig) next(attempt int) time.Duration {
 }
 
 // Retry runs op with backoff on transient errors until MaxRetries or context cancel.
-func Retry(ctx context.Context, cfg BackoffConfig, op func() error) error {
-	var err error
+// Returns the number of retry attempts performed.
+func Retry(ctx context.Context, cfg BackoffConfig, op func() error) (err error, attempts int) {
 	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
+		if attempt > 0 {
+			attempts++
+		}
 		err = op()
 		if err == nil || IsPermanent(err) {
-			return err
+			return err, attempts
 		}
 		if !IsTransient(err) {
-			return err
+			return err, attempts
 		}
 		d := cfg.next(attempt)
 		select {
 		case <-time.After(d):
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), attempts
 		}
 	}
-	return err
+	return err, attempts
 }

@@ -34,6 +34,9 @@ type Config struct {
 
 	PlanMaxFiles     int
 	AllowedWriteDirs []string // TODO: add to config
+
+	RunTestsBeforePR bool
+	RunVetBeforePR   bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -69,6 +72,9 @@ func LoadConfig() (*Config, error) {
 		ContextMaxBytes: viper.GetInt("CONTEXT_MAX_BYTES"),
 
 		PlanMaxFiles: viper.GetInt("PLAN_MAX_FILES"),
+
+		RunTestsBeforePR: viper.GetBool("RUN_TESTS_BEFORE_PR"),
+		RunVetBeforePR:   viper.GetBool("RUN_VET_BEFORE_PR"),
 	}
 
 	// Defaults
