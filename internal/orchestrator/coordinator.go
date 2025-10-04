@@ -49,7 +49,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 		default:
 			// Ensure local repo is up to date before each cycle
 			if err := c.prepareRepository(ctx); err != nil {
-				logger.Error("Repository preparation failed: %v", err)
+				logger.Error("Repository preparation failed", "error", err)
 				backoffSleep(interval)
 				continue
 			}
@@ -68,12 +68,12 @@ func (c *Coordinator) Run(ctx context.Context) {
 				return out, err
 			}()
 			if err != nil {
-				logger.Error("Failed to fetch tickets: %v", err)
+				logger.Error("Failed to fetch tickets", "error", err)
 				backoffSleep(interval)
 				continue
 			}
 			if len(tickets) == 0 {
-				logger.Info("No tickets to process; sleeping %s", interval.String())
+				logger.Info("No tickets to process; sleeping", "interval", interval.String())
 				time.Sleep(interval)
 				continue
 			}
@@ -94,7 +94,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 					defer wg.Done()
 					defer func() { <-sem }()
 					if err := c.processTicket(ctx, key, summary, description); err != nil {
-						logger.Error("Failed processing %s: %v", key, err)
+						logger.Error("Failed processing ticket", "key", key, "error", err)
 						return
 					}
 					c.State.MarkProcessed(key)
@@ -103,7 +103,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 			wg.Wait()
 			// log metrics summary
 			s := c.Metrics.Snapshot()
-			logger.Info("Run summary: tickets", s.TicketsProcessed, " prs =", s.PRsCreated, "retries = ", s.Retries, "Api failures =", s.AIPlanFailures)
+			logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
 			time.Sleep(interval)
 		}
 	}
@@ -131,14 +131,14 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 	}
 	_ = c.Repository.SwitchBranch(ctx, base)
 	if err := c.Repository.SyncWithRemote(ctx); err != nil {
-		logger.Error("Sync failed: %v", err)
+		logger.Error("Sync failed", "error", err)
 	}
 	return nil
 }
 
 func (c *Coordinator) processTicket(ctx context.Context, key, summary, description string) error {
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
-	logger.Info("Creating branch %s", branchName)
+	logger.Info("Creating branch", "branch", branchName)
 	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
 		return fmt.Errorf("create branch: %w", err)
 	}
@@ -183,17 +183,17 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	changed, err := c.Repository.HasLocalChanges(ctx)
 	if err != nil {
-		logger.Error("status failed: %v", err)
+		logger.Error("status failed", "error", err)
 	}
 	if !changed && len(valid) == 0 {
-		logger.Info("No effective changes for %s; skipping push/PR", key)
+		logger.Info("No effective changes; skipping push/PR", "key", key)
 		return nil
 	}
 	// quality gates before push/PR
 	// reuse existing repoRoot
 	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
 	if !ok {
-		logger.Error("Quality gates failed; skipping push/PR for %s", key)
+		logger.Error("Quality gates failed; skipping push/PR", "key", key)
 		return nil
 	}
 	if err := c.Repository.Push(ctx, branchName); err != nil {
@@ -218,11 +218,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if prErr != nil {
 		return fmt.Errorf("create PR: %w", prErr)
 	}
-	logger.Info("Created PR: %s", prURL)
+	logger.Info("Created PR", "url", prURL)
 	c.Metrics.IncPRsCreated()
 	// Mark Done
 	if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
-		logger.Error("Failed to move ticket to Done: %v", err)
+		logger.Error("Failed to move ticket to Done", "error", err)
 	}
 	c.Metrics.IncTicketsProcessed()
 	return nil
