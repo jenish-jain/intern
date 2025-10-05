@@ -29,7 +29,7 @@ type Client struct {
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
-		Model:  "claude-3-5-sonnet-20240620",
+		Model:  "claude-sonnet-4-20250514",
 		HTTP:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
@@ -51,22 +51,7 @@ func sanitizeJSON(s string) string {
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
 func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]ai.CodeChange, error) {
-	prompt := fmt.Sprintf(`You are a senior Go engineer. Output ONLY compact JSON. No markdown.
-Ticket: %s - %s
-Description:
-%s
-
-Repository context (truncated):
-%s
-
-Output strictly a JSON array, no surrounding text, like:
-[
-  {"path":"relative/path.ext","operation":"create|update","content":"file content"}
-]
-- If content has quotes/newlines, escape properly per JSON.
-- Alternatively you MAY use {"content_b64":"<base64>"} to avoid escaping.
-- Only include files required by the description.`, ticketKey, ticketSummary, ticketDescription, repoContext)
-
+	prompt := ai.BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext, ai.PlanPromptOptions{AllowBase64: true})
 	logger.Debug("prompt in anthropic", "prompt", prompt)
 
 	reqBody := codeGenRequest{

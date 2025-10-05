@@ -11,7 +11,7 @@ import (
 	"intern/internal/repository"
 	"intern/internal/repository/github"
 	"intern/internal/ticketing"
-	"intern/internal/ticketing/jira"
+	jiraraw "intern/internal/ticketing/jira-raw"
 
 	logger "github.com/jenish-jain/logger"
 )
@@ -34,7 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	jiraClient, err := jira.NewClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
+	jiraClient, err := jiraraw.NewRawClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
+	// jiraClient, err := jira.NewClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
 	if err != nil {
 		logger.Error("Failed to init JIRA client: %v", err)
 		os.Exit(1)
@@ -79,9 +80,15 @@ AGENT_USERNAME="ai-intern"
 POLLING_INTERVAL="30s"
 MAX_CONCURRENT_TICKETS=1
 
-WORKING_DIR="./workspace"
+WORKING_DIR="./workspace"  # Will be ./workspace/{GITHUB_REPO} automatically
 BASE_BRANCH="master"
 BRANCH_PREFIX="feature/"
+
+CONTEXT_MAX_FILES=40
+CONTEXT_MAX_BYTES=32
+
+PLAN_MAX_FILES=10
+ALLOWED_WRITE_DIRS="internal,cmd,pkg,docs,config,."
 `), 0644)
 
 	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)

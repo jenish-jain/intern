@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -24,9 +25,18 @@ type Config struct {
 	PollingInterval      string
 	MaxConcurrentTickets int
 
-	WorkingDir   string
+	WorkingDir   string // Base working directory, will be joined with GitHubRepo to create ./workspace/{repoName}
 	BaseBranch   string
 	BranchPrefix string
+
+	ContextMaxFiles int
+	ContextMaxBytes int
+
+	PlanMaxFiles     int
+	AllowedWriteDirs []string // TODO: add to config
+
+	RunTestsBeforePR bool
+	RunVetBeforePR   bool
 }
 
 func LoadConfig() (*Config, error) {
@@ -57,6 +67,35 @@ func LoadConfig() (*Config, error) {
 		WorkingDir:   viper.GetString("WORKING_DIR"),
 		BaseBranch:   viper.GetString("BASE_BRANCH"),
 		BranchPrefix: viper.GetString("BRANCH_PREFIX"),
+
+		ContextMaxFiles: viper.GetInt("CONTEXT_MAX_FILES"),
+		ContextMaxBytes: viper.GetInt("CONTEXT_MAX_BYTES"),
+
+		PlanMaxFiles: viper.GetInt("PLAN_MAX_FILES"),
+
+		RunTestsBeforePR: viper.GetBool("RUN_TESTS_BEFORE_PR"),
+		RunVetBeforePR:   viper.GetBool("RUN_VET_BEFORE_PR"),
+	}
+
+	// Defaults
+	if cfg.ContextMaxFiles <= 0 {
+		cfg.ContextMaxFiles = 40
+	}
+	if cfg.ContextMaxBytes <= 0 {
+		cfg.ContextMaxBytes = 32 * 1024
+	}
+	if cfg.PlanMaxFiles <= 0 {
+		cfg.PlanMaxFiles = 20
+	}
+	allowed := viper.GetString("ALLOWED_WRITE_DIRS")
+	if strings.TrimSpace(allowed) == "" {
+		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs", "config", "."}
+	} else {
+		parts := strings.Split(allowed, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		cfg.AllowedWriteDirs = parts
 	}
 
 	if err := cfg.Validate(); err != nil {
