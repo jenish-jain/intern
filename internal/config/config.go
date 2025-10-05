@@ -25,7 +25,7 @@ type Config struct {
 	PollingInterval      string
 	MaxConcurrentTickets int
 
-	WorkingDir   string
+	WorkingDir   string // Base working directory, will be joined with GitHubRepo to create ./workspace/{repoName}
 	BaseBranch   string
 	BranchPrefix string
 
@@ -89,7 +89,7 @@ func LoadConfig() (*Config, error) {
 	}
 	allowed := viper.GetString("ALLOWED_WRITE_DIRS")
 	if strings.TrimSpace(allowed) == "" {
-		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs"}
+		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs", "config", "."}
 	} else {
 		parts := strings.Split(allowed, ",")
 		for i := range parts {

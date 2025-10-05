@@ -29,7 +29,7 @@ type Client struct {
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
-		Model:  "claude-3-5-sonnet-20240620",
+		Model:  "claude-sonnet-4-20250514",
 		HTTP:   &http.Client{Timeout: 60 * time.Second},
 	}
 }
