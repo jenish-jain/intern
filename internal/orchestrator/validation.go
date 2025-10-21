@@ -2,22 +2,21 @@ package orchestrator
 
 import (
 	"fmt"
+	"intern/internal/ai/agent"
 	"path/filepath"
 	"strings"
-
-	"intern/internal/ai"
 
 	logger "github.com/jenish-jain/logger"
 )
 
-func validatePlannedChanges(root string, changes []ai.CodeChange, allowedDirs []string, maxFiles int) ([]ai.CodeChange, error) {
+func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs []string, maxFiles int) ([]agent.CodeChange, error) {
 	logger.Debug("Validating planned changes", "total_changes", len(changes), "allowed_dirs", allowedDirs)
 
 	if len(changes) > maxFiles {
 		logger.Debug("Truncating changes due to max files limit", "original", len(changes), "max", maxFiles)
 		changes = changes[:maxFiles]
 	}
-	var out []ai.CodeChange
+	var out []agent.CodeChange
 	for _, ch := range changes {
 		p := strings.TrimSpace(ch.Path)
 		if p == "" {
@@ -48,7 +47,7 @@ func validatePlannedChanges(root string, changes []ai.CodeChange, allowedDirs []
 			continue
 		}
 		logger.Debug("Accepting change", "path", clean, "operation", ch.Operation)
-		out = append(out, ai.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content})
+		out = append(out, agent.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content})
 	}
 	logger.Debug("Validation complete", "accepted_changes", len(out), "rejected_changes", len(changes)-len(out))
 	if len(out) == 0 {

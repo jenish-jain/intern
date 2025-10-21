@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"intern/internal/ai"
+	"intern/internal/ai/agent"
 
 	"github.com/jenish-jain/logger"
 )
 
-// Ensure Client implements ai.Agent
-var _ ai.Agent = (*Client)(nil)
+// Ensure Client implements agent.Agent
+var _ agent.Agent = (*Client)(nil)
 
 type Client struct {
 	APIKey string
@@ -50,8 +50,8 @@ func sanitizeJSON(s string) string {
 }
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
-func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]ai.CodeChange, error) {
-	prompt := ai.BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext, ai.PlanPromptOptions{AllowBase64: true})
+func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, error) {
+	prompt := agent.BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext, agent.PlanPromptOptions{AllowBase64: true})
 	logger.Debug("prompt in anthropic", "prompt", prompt)
 
 	reqBody := codeGenRequest{
@@ -86,7 +86,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		return nil, fmt.Errorf("empty anthropic response")
 	}
 	raw := sanitizeJSON(cg.Content[0].Text)
-	var changes []ai.CodeChange
+	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
 	}
