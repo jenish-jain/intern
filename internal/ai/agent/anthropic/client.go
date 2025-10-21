@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
-	"strings"
 	"time"
 
 	"intern/internal/ai/agent"
@@ -20,6 +18,10 @@ import (
 // Ensure Client implements agent.Agent
 var _ agent.Agent = (*Client)(nil)
 
+const url = "https://api.anthropic.com/v1/messages"
+const anthropicVersion = "2023-06-01"
+const model = "claude-sonnet-4-20250514"
+
 type Client struct {
 	APIKey string
 	Model  string
@@ -29,24 +31,9 @@ type Client struct {
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
-		Model:  "claude-sonnet-4-20250514",
+		Model:  model,
 		HTTP:   &http.Client{Timeout: 60 * time.Second},
 	}
-}
-
-// sanitizeJSON tries to strip code fences and extract the JSON array
-func sanitizeJSON(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```JSON")
-	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	// Extract first JSON array if extra text present
-	re := regexp.MustCompile(`(?s)\[.*\]`)
-	if m := re.FindString(s); m != "" {
-		return m
-	}
-	return s
 }
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
@@ -61,13 +48,13 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	}
 	payload, _ := json.Marshal(reqBody)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("anthropic-version", anthropicVersion)
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -85,7 +72,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	if len(cg.Content) == 0 {
 		return nil, fmt.Errorf("empty anthropic response")
 	}
-	raw := sanitizeJSON(cg.Content[0].Text)
+	raw := agent.SanitizeResponse(cg.Content[0].Text)
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
