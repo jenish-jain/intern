@@ -2,9 +2,8 @@ package orchestrator
 
 import (
 	"fmt"
+	"intern/internal/ai/agent"
 	"strings"
-
-	"intern/internal/ai"
 )
 
 func buildPRTitle(ticketKey, summary string) string {
@@ -15,7 +14,7 @@ func buildPRTitle(ticketKey, summary string) string {
 }
 
 // buildPRBody renders a markdown body including ticket info, description and file list
-func buildPRBody(ticketKey, summary, description string, changes []ai.CodeChange, notes []string) string {
+func buildPRBody(ticketKey, summary, description string, changes []agent.CodeChange, notes []string) string {
 	var b strings.Builder
 	b.WriteString("## Ticket\n")
 	b.WriteString(fmt.Sprintf("- Key: %s\n", ticketKey))

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"intern/internal/ai"
+	"intern/internal/ai/agent"
 	"intern/internal/config"
 	"intern/internal/repository"
 	"intern/internal/ticketing"
@@ -19,13 +20,13 @@ import (
 type Coordinator struct {
 	Ticketing  *ticketing.TicketingService
 	Repository *repository.RepositoryService
-	Agent      ai.Agent
+	Agent      agent.Agent
 	Cfg        *config.Config
 	State      *State
 	Metrics    *Metrics
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent ai.Agent, cfg *config.Config, state *State) *Coordinator {
+func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State) *Coordinator {
 	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics()}
 }
 
@@ -146,7 +147,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
-	var changes []ai.CodeChange
+	var changes []agent.CodeChange
 	planErr, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 		if e != nil {

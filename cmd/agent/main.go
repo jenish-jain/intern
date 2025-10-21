@@ -5,7 +5,7 @@ import (
 	"flag"
 	"os"
 
-	"intern/internal/ai/anthropic"
+	"intern/internal/ai/agent/anthropic"
 	"intern/internal/config"
 	"intern/internal/orchestrator"
 	"intern/internal/repository"
