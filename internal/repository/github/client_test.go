@@ -3,14 +3,16 @@ package github
 import (
 	"context"
 	"errors"
-	"intern/internal/github/mocks"
+	"intern/internal/repository/github/mocks"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	go_github "github.com/google/go-github/v58/github" // Alias go-github
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -84,13 +86,6 @@ func TestHealthCheck_Failure(t *testing.T) {
 	}
 }
 
-func TestRaw(t *testing.T) {
-	c := NewClient("token", "owner", "repo")
-	if c.Raw() == nil {
-		t.Error("expected non-nil Raw client")
-	}
-}
-
 func TestCloneRepository(t *testing.T) {
 	// Create a temporary directory for the cloned repository
 	tempDir, err := ioutil.TempDir("", "test-clone-")
@@ -120,11 +115,21 @@ func TestCloneRepository(t *testing.T) {
 	_, err = w.Add("testfile.txt")
 	assert.NoError(t, err)
 
-	_, err = w.Commit("initial commit", &git.CommitOptions{})
+	_, err = w.Commit("initial commit", &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  "Test User",
+			Email: "test@example.com",
+			When:  time.Now(),
+		},
+	})
 	assert.NoError(t, err)
 
 	// Create a githubClient instance
 	c := NewClient("dummy_token", "test_owner", "test_repo") // token is not used in local clone
+
+	// Set the repository URL to the local test repository
+	gc := c.(*githubClient)
+	gc.repoURL = remoteRepoDir
 
 	// Perform the clone operation
 	clonePath := filepath.Join(tempDir, "test_repo")
@@ -276,14 +281,13 @@ func TestSwitchBranch(t *testing.T) {
 	ioutil.WriteFile(filepath.Join(repoDir, "master.txt"), []byte("master"), 0644)
 	_, err = w.Add("master.txt")
 	assert.NoError(t, err)
-	_, err = w.Commit("master commit", &git.CommitOptions{})
+	masterCommit, err := w.Commit("master commit", &git.CommitOptions{})
 	assert.NoError(t, err)
 
-	// Create a new branch and commit a file to it
+	// Create a new branch pointing to the same commit as master
 	newBranchRef := plumbing.ReferenceName("refs/heads/feature-x")
-	newBranchHash, err := w.Commit("feature commit", &git.CommitOptions{})
+	err = r.Storer.SetReference(plumbing.NewHashReference(newBranchRef, masterCommit))
 	assert.NoError(t, err)
-	_ = r.Storer.SetReference(plumbing.NewHashReference(newBranchRef, newBranchHash))
 
 	// Create a githubClient instance
 	c := NewClient("dummy_token", "test_owner", "test_repo_switch")

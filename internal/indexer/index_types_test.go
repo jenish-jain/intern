@@ -1,7 +1,8 @@
-package ai
+package indexer_test
 
 import (
 	"encoding/json"
+	"intern/internal/indexer"
 	"testing"
 	"time"
 
@@ -12,11 +13,11 @@ import (
 func TestFileIndex_JSONSerialization(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
-	index := &FileIndex{
+	index := &indexer.FileIndex{
 		Version:   "1.0",
 		IndexedAt: now,
 		RepoRoot:  "/test/repo",
-		Files: map[string]FileMetadata{
+		Files: map[string]indexer.FileMetadata{
 			"main.go": {
 				Path:         "main.go",
 				Size:         1024,
@@ -39,7 +40,7 @@ func TestFileIndex_JSONSerialization(t *testing.T) {
 	assert.Contains(t, string(data), "Main entry point")
 
 	// Deserialize from JSON
-	var decoded FileIndex
+	var decoded indexer.FileIndex
 	err = json.Unmarshal(data, &decoded)
 	require.NoError(t, err)
 
@@ -52,7 +53,7 @@ func TestFileIndex_JSONSerialization(t *testing.T) {
 }
 
 func TestFileMetadata_DefaultValues(t *testing.T) {
-	meta := FileMetadata{
+	meta := indexer.FileMetadata{
 		Path: "test.go",
 		Size: 500,
 	}
@@ -65,33 +66,33 @@ func TestFileMetadata_DefaultValues(t *testing.T) {
 }
 
 func TestContextStrategy_Constants(t *testing.T) {
-	assert.Equal(t, ContextStrategy("full"), ContextStrategyFull)
-	assert.Equal(t, ContextStrategy("smart"), ContextStrategySmart)
+	assert.Equal(t, indexer.ContextStrategy("full"), indexer.ContextStrategyFull)
+	assert.Equal(t, indexer.ContextStrategy("smart"), indexer.ContextStrategySmart)
 }
 
 func TestContextTier_Values(t *testing.T) {
-	assert.Equal(t, 0, int(ContextTierBaseline))
-	assert.Equal(t, 1, int(ContextTierSmart))
-	assert.Equal(t, 2, int(ContextTierFull))
+	assert.Equal(t, 0, int(indexer.ContextTierBaseline))
+	assert.Equal(t, 1, int(indexer.ContextTierSmart))
+	assert.Equal(t, 2, int(indexer.ContextTierFull))
 }
 
 func TestContextBuildOptions_DefaultBehavior(t *testing.T) {
-	opts := ContextBuildOptions{
-		Strategy:        ContextStrategySmart,
-		Tier:            ContextTierSmart,
+	opts := indexer.ContextBuildOptions{
+		Strategy:        indexer.ContextStrategySmart,
+		Tier:            indexer.ContextTierSmart,
 		MaxFiles:        15,
 		MaxBytesPerFile: 100000,
 		UseCache:        true,
 	}
 
-	assert.Equal(t, ContextStrategySmart, opts.Strategy)
-	assert.Equal(t, ContextTierSmart, opts.Tier)
+	assert.Equal(t, indexer.ContextStrategySmart, opts.Strategy)
+	assert.Equal(t, indexer.ContextTierSmart, opts.Tier)
 	assert.Equal(t, 15, opts.MaxFiles)
 	assert.True(t, opts.UseCache)
 }
 
 func TestFileScore_Comparison(t *testing.T) {
-	scores := []FileScore{
+	scores := []indexer.FileScore{
 		{Path: "high.go", Score: 10.0},
 		{Path: "medium.go", Score: 5.0},
 		{Path: "low.go", Score: 1.0},

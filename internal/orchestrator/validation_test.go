@@ -1,12 +1,12 @@
 package orchestrator
 
 import (
+	"intern/internal/ai/agent"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"intern/internal/ai"
-
+	"github.com/jenish-jain/logger"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -16,13 +16,13 @@ func TestValidatePlannedChanges(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		changes  []ai.CodeChange
+		changes  []agent.CodeChange
 		expected int
 		hasError bool
 	}{
 		{
 			name: "valid changes",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "internal/service.go", Content: "package internal", Operation: "create"},
 				{Path: "cmd/main.go", Content: "package main", Operation: "update"},
 			},
@@ -31,7 +31,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "path traversal blocked",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "../../../etc/passwd", Content: "malicious", Operation: "create"},
 				{Path: "internal/service.go", Content: "package internal", Operation: "create"},
 			},
@@ -40,7 +40,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "absolute paths blocked",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "/etc/passwd", Content: "malicious", Operation: "create"},
 				{Path: "internal/service.go", Content: "package internal", Operation: "create"},
 			},
@@ -49,7 +49,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "disallowed directories blocked",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "malicious/file.go", Content: "bad content", Operation: "create"},
 				{Path: "internal/service.go", Content: "package internal", Operation: "create"},
 			},
@@ -58,7 +58,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "empty content blocked",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "internal/service.go", Content: "", Operation: "create"},
 				{Path: "cmd/main.go", Content: "package main", Operation: "create"},
 			},
@@ -67,7 +67,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "empty path blocked",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "", Content: "content", Operation: "create"},
 				{Path: "internal/service.go", Content: "package internal", Operation: "create"},
 			},
@@ -76,7 +76,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "max files limit",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "internal/service1.go", Content: "package internal", Operation: "create"},
 				{Path: "internal/service2.go", Content: "package internal", Operation: "create"},
 				{Path: "internal/service3.go", Content: "package internal", Operation: "create"},
@@ -88,7 +88,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 		},
 		{
 			name: "all changes invalid",
-			changes: []ai.CodeChange{
+			changes: []agent.CodeChange{
 				{Path: "../../../etc/passwd", Content: "malicious", Operation: "create"},
 				{Path: "/etc/passwd", Content: "malicious", Operation: "create"},
 				{Path: "malicious/file.go", Content: "bad content", Operation: "create"},
@@ -100,6 +100,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			logger.Init("debug")
 			result, err := validatePlannedChanges("/fake/root", tt.changes, allowedDirs, maxFiles)
 
 			if tt.hasError {

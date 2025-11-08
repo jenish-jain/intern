@@ -1,4 +1,4 @@
-package ai
+package indexer
 
 import (
 	"encoding/json"
@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	IndexVersion      = "1.0"
-	IndexFileName     = "file_index.json"
-	IndexDirName      = ".ai-intern"
-	ProjectIndexName  = "PROJECT_INDEX.md"
+	IndexVersion     = "1.0"
+	IndexFileName    = "file_index.json"
+	IndexDirName     = ".ai-intern"
+	ProjectIndexName = "PROJECT_INDEX.md"
 )
 
 // Indexer generates and manages repository file indexes
@@ -23,8 +23,8 @@ type Indexer struct {
 	repoRoot string
 }
 
-// NewIndexer creates a new repository indexer
-func NewIndexer(repoRoot string) *Indexer {
+// New creates a new repository indexer
+func New(repoRoot string) *Indexer {
 	return &Indexer{repoRoot: repoRoot}
 }
 
@@ -157,23 +157,16 @@ func (idx *Indexer) categorizeFile(relPath string) string {
 		return "doc"
 	}
 	if strings.Contains(lower, "config") || strings.Contains(lower, ".env") ||
-	   strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") ||
-	   strings.HasSuffix(lower, ".json") {
+		strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") ||
+		strings.HasSuffix(lower, ".json") {
 		return "config"
 	}
 	if strings.Contains(lower, "/cmd/") || strings.Contains(lower, "main.go") {
 		return "core"
 	}
-	if strings.Contains(lower, "internal/orchestrator/") ||
-	   strings.Contains(lower, "internal/ai/") ||
-	   strings.Contains(lower, "internal/repository/") ||
-	   strings.Contains(lower, "internal/ticketing/") {
+	if strings.Contains(lower, "internal/") {
 		return "core"
 	}
-	if strings.Contains(lower, "internal/") {
-		return "util"
-	}
-
 	return "other"
 }
 

@@ -8,7 +8,6 @@ import (
 // PlanPromptOptions configures the prompt generation
 type PlanPromptOptions struct {
 	AllowBase64 bool
-	MaxNotes    int // reserved for future use (e.g., additional hints)
 }
 
 // BuildPlanChangesPrompt builds a strict JSON-only prompt for planning code changes.
