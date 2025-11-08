@@ -38,6 +38,7 @@ install: ## Install the binary to $GOPATH/bin
 # Development targets
 .PHONY: run
 run: build ## Build and run the agent
+	export $(cat .env | xargs)
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
 .PHONY: run-init
