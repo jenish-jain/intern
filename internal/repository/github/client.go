@@ -23,6 +23,7 @@ type githubClient struct {
 	owner    string
 	repo     string
 	token    string // Store the token for git operations
+	repoURL  string // Optional: override repository URL for testing
 }
 
 func NewClient(token, owner, repo string) repository.RepositoryClient {
@@ -53,8 +54,14 @@ func (c *githubClient) Raw() *gh.Client {
 
 // Implement RepositoryClient interface methods
 func (c *githubClient) CloneRepository(ctx context.Context, destPath string) error {
+	// Use override URL if set (for testing), otherwise use GitHub URL
+	url := c.repoURL
+	if url == "" {
+		url = fmt.Sprintf("https://github.com/%s/%s.git", c.owner, c.repo)
+	}
+
 	_, err := git.PlainCloneContext(ctx, destPath, false, &git.CloneOptions{
-		URL:      fmt.Sprintf("https://github.com/%s/%s.git", c.owner, c.repo),
+		URL:      url,
 		Auth:     &http.BasicAuth{Username: c.token, Password: ""}, // Using token as username
 		Progress: os.Stdout,
 	})
@@ -93,6 +100,10 @@ func (c *githubClient) ListFiles(ctx context.Context, path string) ([]string, er
 	err := filepath.Walk(filepath.Join(repoPath, path), func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		// Skip .git directory
+		if info.IsDir() && info.Name() == ".git" {
+			return filepath.SkipDir
 		}
 		if !info.IsDir() {
 			relPath, _ := filepath.Rel(repoPath, p)

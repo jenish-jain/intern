@@ -1,14 +1,14 @@
-package ai
+package indexer
 
 import "time"
 
 // FileIndex represents the complete index of a repository
 type FileIndex struct {
-	Version   string                 `json:"version"`
-	IndexedAt time.Time              `json:"indexed_at"`
-	RepoRoot  string                 `json:"repo_root"`
+	Version   string                  `json:"version"`
+	IndexedAt time.Time               `json:"indexed_at"`
+	RepoRoot  string                  `json:"repo_root"`
 	Files     map[string]FileMetadata `json:"files"`
-	Modules   map[string][]string    `json:"modules"`
+	Modules   map[string][]string     `json:"modules"`
 }
 
 // FileMetadata contains metadata about a single file
@@ -45,7 +45,7 @@ type ContextBuildOptions struct {
 	Tier              ContextTier
 	MaxFiles          int
 	MaxBytesPerFile   int
-	IncludeRecent     int  // Number of recent commits to prioritize
+	IncludeRecent     int // Number of recent commits to prioritize
 	UseCache          bool
 	TicketDescription string // Used for smart context selection
 }
