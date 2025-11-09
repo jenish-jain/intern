@@ -156,18 +156,29 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 
 	var changes []agent.CodeChange
+	var usageMetrics *agent.UsageMetrics
 	planErr, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
+		ch, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 		if e != nil {
 			return MakeTransient(e)
 		}
 		changes = ch
+		usageMetrics = metrics
 		return nil
 	})
 	c.Metrics.AddRetries(attempts)
 	if planErr != nil {
 		c.Metrics.IncAIPlanFailures()
 		return fmt.Errorf("AI planning failed: %w", planErr)
+	}
+
+	// Log per-ticket cost and metrics
+	if usageMetrics != nil {
+		logger.Info("AI generated code",
+			"ticket", key,
+			"cost", ai.FormatCost(usageMetrics.EstimatedCost),
+			"input_tokens", ai.FormatTokens(usageMetrics.InputTokens),
+			"output_tokens", ai.FormatTokens(usageMetrics.OutputTokens))
 	}
 	valid, verr := validatePlannedChanges(repoRoot, changes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
 	if verr != nil {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"intern/internal/ai"
 	"intern/internal/ai/agent"
 	"intern/internal/util"
 
@@ -42,7 +43,8 @@ func NewClient(apiKey string) *Client {
 }
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
-func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, error) {
+// Returns the code changes, usage metrics for cost tracking, and any error.
+func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, *agent.UsageMetrics, error) {
 	prompt := agent.BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext, agent.PlanPromptOptions{AllowBase64: true})
 	logger.Debug("prompt in anthropic", "prompt", prompt)
 
@@ -53,12 +55,12 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.APIKey)
@@ -66,22 +68,22 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
+			return nil, nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
 		}
-		return nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
+		return nil, nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
 	}
 	var cg codeGenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cg); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(cg.Content) == 0 {
-		return nil, fmt.Errorf("empty anthropic response")
+		return nil, nil, fmt.Errorf("empty anthropic response")
 	}
 	raw := agent.SanitizeResponse(cg.Content[0].Text)
 	logger.Debug("AI response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
@@ -94,7 +96,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 			"response_length", len(raw),
 			"response_preview", raw[:util.Min(1000, len(raw))],
 			"stop_reason", cg.StopReason)
-		return nil, fmt.Errorf("invalid JSON from model: %w", err)
+		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
 	}
 	// Decode base64 content if provided
 	for i := range changes {
@@ -105,5 +107,28 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 			}
 		}
 	}
-	return changes, nil
+
+	// Build usage metrics from API response
+	metrics := c.buildUsageMetrics(&cg.Usage, len(repoContext))
+
+	return changes, metrics, nil
+}
+
+// buildUsageMetrics converts Anthropic-specific usage data to provider-agnostic metrics.
+// Calculates cost using the current Claude Sonnet 4 pricing model.
+func (c *Client) buildUsageMetrics(usage *Usage, contextBytes int) *agent.UsageMetrics {
+	// Calculate cost using the Anthropic pricing model
+	cost := ai.CalculateCost(usage.InputTokens, usage.OutputTokens, &ai.ClaudeSonnet4)
+
+	return &agent.UsageMetrics{
+		InputTokens:   usage.InputTokens,
+		OutputTokens:  usage.OutputTokens,
+		TotalTokens:   usage.InputTokens + usage.OutputTokens,
+		EstimatedCost: cost,
+		ContextStats: agent.ContextStats{
+			ContextBytes: contextBytes,
+			// Strategy, FilesIncluded, and Keywords will be set by the orchestrator
+			// when it builds the context
+		},
+	}
 }
