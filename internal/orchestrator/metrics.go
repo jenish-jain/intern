@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 )
@@ -15,10 +16,10 @@ type Metrics struct {
 	aiPlanFailures   int64
 	ticketsFailed    int64
 
-	// Cost tracking (using cents to avoid float64 atomics)
-	totalInputTokens  int64
-	totalOutputTokens int64
-	totalCostCents    int64 // Cost in cents (multiply by 0.01 for dollars)
+	// Cost tracking (using micro-dollars to avoid float64 atomics)
+	totalInputTokens     int64
+	totalOutputTokens    int64
+	totalCostMicroDollar int64 // Cost in micro-dollars (multiply by 0.000001 for dollars)
 
 	// Context strategy tracking
 	smartContextUsed  int64
@@ -54,8 +55,9 @@ func (m *Metrics) IncAIPlanFailures() { atomic.AddInt64(&m.aiPlanFailures, 1) }
 func (m *Metrics) AddTokenUsage(inputTokens, outputTokens int, cost float64) {
 	atomic.AddInt64(&m.totalInputTokens, int64(inputTokens))
 	atomic.AddInt64(&m.totalOutputTokens, int64(outputTokens))
-	// Store cost in cents to use int64 atomic operations
-	atomic.AddInt64(&m.totalCostCents, int64(cost*100))
+	// Store cost in micro-dollars to use int64 atomic operations with sufficient precision
+	// Use math.Round to avoid truncation errors
+	atomic.AddInt64(&m.totalCostMicroDollar, int64(math.Round(cost*1000000)))
 }
 
 // Context strategy tracking
@@ -108,13 +110,13 @@ type MetricsSnapshot struct {
 // Calculates derived values like averages.
 func (m *Metrics) Snapshot() MetricsSnapshot {
 	ticketsProcessed := atomic.LoadInt64(&m.ticketsProcessed)
-	totalCostCents := atomic.LoadInt64(&m.totalCostCents)
+	totalCostMicroDollar := atomic.LoadInt64(&m.totalCostMicroDollar)
 	totalInputTokens := atomic.LoadInt64(&m.totalInputTokens)
 	totalOutputTokens := atomic.LoadInt64(&m.totalOutputTokens)
 	totalExecutionTimeMs := atomic.LoadInt64(&m.totalExecutionTimeMs)
 	totalFilesChanged := atomic.LoadInt64(&m.totalFilesChanged)
 
-	totalCost := float64(totalCostCents) / 100.0
+	totalCost := float64(totalCostMicroDollar) / 1000000.0
 	totalExecutionTime := time.Duration(totalExecutionTimeMs) * time.Millisecond
 
 	// Calculate averages (avoid division by zero)
