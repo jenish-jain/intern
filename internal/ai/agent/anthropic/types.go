@@ -22,4 +22,12 @@ type codeGenResponse struct {
 		Text string `json:"text"` // Generated text content
 	} `json:"content"`
 	StopReason string `json:"stop_reason"` // Why the model stopped (e.g., "end_turn", "max_tokens")
+	Usage      Usage  `json:"usage"`       // Token usage statistics from the API
+}
+
+// Usage represents token usage statistics returned by the Anthropic API.
+// This data is used for cost calculation and metrics tracking.
+type Usage struct {
+	InputTokens  int `json:"input_tokens"`  // Number of tokens in the input prompt
+	OutputTokens int `json:"output_tokens"` // Number of tokens in the generated response
 }
