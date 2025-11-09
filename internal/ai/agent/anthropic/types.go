@@ -15,4 +15,5 @@ type codeGenResponse struct {
 	Content []struct {
 		Text string `json:"text"`
 	} `json:"content"`
+	StopReason string `json:"stop_reason"` // Why the model stopped (e.g., "end_turn", "max_tokens")
 }

@@ -146,7 +146,15 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	_ = c.Repository.SwitchBranch(ctx, branchName)
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
-	ctxStr := ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
+
+	// Use smart context builder with ticket description for better file selection
+	ctxStr, ctxErr := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles)
+	if ctxErr != nil {
+		// Fall back to simple context builder on error
+		logger.Warn("Smart context builder failed, falling back to simple builder", "error", ctxErr)
+		ctxStr = ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
+	}
+
 	var changes []agent.CodeChange
 	planErr, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)

@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"intern/internal/indexer"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,4 +121,146 @@ func TestHasAnySuffix(t *testing.T) {
 		result := hasAnySuffix(tt.input, tt.suffixes...)
 		assert.Equal(t, tt.expected, result, "hasAnySuffix(%q, %v)", tt.input, tt.suffixes)
 	}
+}
+
+func TestBuildSmartRepoContext(t *testing.T) {
+	// Create a test repository
+	tmpDir := t.TempDir()
+
+	// Create test files
+	testFiles := map[string]string{
+		"internal/auth/login.go": `package auth
+
+type LoginService struct {
+	username string
+}
+
+func (s *LoginService) Authenticate(user, pass string) error {
+	// implementation
+	return nil
+}
+`,
+		"internal/auth/service.go": `package auth
+
+type AuthService struct{}
+
+func NewAuthService() *AuthService {
+	return &AuthService{}
+}
+`,
+		"cmd/main.go": `package main
+
+func main() {
+	println("Hello")
+}
+`,
+		"README.md": "# Test Project\n",
+	}
+
+	for path, content := range testFiles {
+		fullPath := filepath.Join(tmpDir, path)
+		err := os.MkdirAll(filepath.Dir(fullPath), 0755)
+		require.NoError(t, err)
+		err = os.WriteFile(fullPath, []byte(content), 0644)
+		require.NoError(t, err)
+	}
+
+	// Build and save index
+	idx := indexer.New(tmpDir)
+	fileIndex, err := idx.BuildIndex()
+	require.NoError(t, err)
+	err = idx.SaveIndex(fileIndex)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name               string
+		ticketDescription  string
+		expectedInContext  []string
+		notExpectedInContext []string
+	}{
+		{
+			name:              "auth-related ticket",
+			ticketDescription: "Fix authentication bug in login service",
+			expectedInContext: []string{
+				"internal/auth/login.go",
+				"LoginService",
+				"Authenticate",
+			},
+			notExpectedInContext: []string{},
+		},
+		{
+			name:              "specific file mentioned",
+			ticketDescription: "Update internal/auth/service.go to add new method",
+			expectedInContext: []string{
+				"internal/auth/service.go",
+				"AuthService",
+			},
+			notExpectedInContext: []string{},
+		},
+		{
+			name:              "empty description falls back",
+			ticketDescription: "",
+			expectedInContext: []string{
+				// Should fall back to simple builder
+			},
+			notExpectedInContext: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			context, err := BuildSmartRepoContext(tmpDir, tt.ticketDescription, 5)
+			require.NoError(t, err)
+
+			for _, expected := range tt.expectedInContext {
+				assert.Contains(t, context, expected,
+					"Context should contain '%s'", expected)
+			}
+
+			for _, notExpected := range tt.notExpectedInContext {
+				assert.NotContains(t, context, notExpected,
+					"Context should not contain '%s'", notExpected)
+			}
+		})
+	}
+}
+
+func TestBuildSmartRepoContext_NoIndex(t *testing.T) {
+	// Create a test repository without index
+	tmpDir := t.TempDir()
+
+	testFile := filepath.Join(tmpDir, "test.go")
+	err := os.WriteFile(testFile, []byte("package test"), 0644)
+	require.NoError(t, err)
+
+	// Should fall back to simple builder
+	context, err := BuildSmartRepoContext(tmpDir, "Fix test bug", 10)
+	require.NoError(t, err)
+	assert.NotEmpty(t, context)
+}
+
+func TestBuildSmartRepoContext_FallbackOnError(t *testing.T) {
+	// Create a test repository with invalid index
+	tmpDir := t.TempDir()
+
+	// Create invalid index
+	indexDir := filepath.Join(tmpDir, ".ai-intern")
+	err := os.MkdirAll(indexDir, 0755)
+	require.NoError(t, err)
+	indexFile := filepath.Join(indexDir, "file_index.json")
+	err = os.WriteFile(indexFile, []byte("invalid json"), 0644)
+	require.NoError(t, err)
+
+	// Should fall back gracefully
+	context, err := BuildSmartRepoContext(tmpDir, "Fix bug", 10)
+	require.NoError(t, err)
+	// Fallback will return empty string if no files
+	assert.NotNil(t, context)
+}
+
+func TestMin(t *testing.T) {
+	assert.Equal(t, 1, min(1, 2))
+	assert.Equal(t, 1, min(2, 1))
+	assert.Equal(t, 5, min(5, 5))
+	assert.Equal(t, -1, min(-1, 0))
 }

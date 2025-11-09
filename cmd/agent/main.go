@@ -4,9 +4,11 @@ import (
 	"context"
 	"flag"
 	"os"
+	"path/filepath"
 
 	"intern/internal/ai/agent/anthropic"
 	"intern/internal/config"
+	"intern/internal/indexer"
 	"intern/internal/orchestrator"
 	"intern/internal/repository"
 	"intern/internal/repository/github"
@@ -18,6 +20,7 @@ import (
 
 func main() {
 	initFlag := flag.Bool("init", false, "initialize sample config and state files")
+	buildIndexFlag := flag.Bool("build-index", false, "build file index for smart context selection")
 	flag.Parse()
 
 	logger.Init("debug")
@@ -25,6 +28,11 @@ func main() {
 	if *initFlag {
 		writeSampleFiles()
 		logger.Info("Sample config.yaml, .env.example, and agent_state.jsonc created.")
+		return
+	}
+
+	if *buildIndexFlag {
+		buildIndex()
 		return
 	}
 
@@ -92,4 +100,61 @@ ALLOWED_WRITE_DIRS="internal,cmd,pkg,docs,config,."
 `), 0644)
 
 	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)
+}
+
+func buildIndex() {
+	logger.Info("Building file index for smart context selection...")
+
+	// Load config to get repository path
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logger.Error("Failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	// Determine repository root
+	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	if workingDir == "" {
+		workingDir = cfg.WorkingDir
+	}
+	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
+
+	// Check if repository exists
+	if _, err := os.Stat(repoRoot); os.IsNotExist(err) {
+		logger.Error("Repository not found", "path", repoRoot)
+		logger.Info("Make sure to clone the repository first or set AGENT_WORKING_DIR correctly")
+		os.Exit(1)
+	}
+
+	logger.Info("Indexing repository", "path", repoRoot)
+
+	// Build index
+	idx := indexer.New(repoRoot)
+	fileIndex, err := idx.BuildIndex()
+	if err != nil {
+		logger.Error("Failed to build index", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("Index built successfully", "files", len(fileIndex.Files), "modules", len(fileIndex.Modules))
+
+	// Save index
+	if err := idx.SaveIndex(fileIndex); err != nil {
+		logger.Error("Failed to save index", "error", err)
+		os.Exit(1)
+	}
+
+	indexPath := filepath.Join(repoRoot, indexer.IndexDirName, indexer.IndexFileName)
+	logger.Info("Index saved successfully", "path", indexPath)
+
+	// Show some statistics
+	categoryCounts := make(map[string]int)
+	for _, meta := range fileIndex.Files {
+		categoryCounts[meta.Category]++
+	}
+
+	logger.Info("Index statistics:")
+	for category, count := range categoryCounts {
+		logger.Info("  - "+category, "count", count)
+	}
 }
