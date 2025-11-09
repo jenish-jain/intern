@@ -43,7 +43,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	reqBody := codeGenRequest{
 		Model:     c.Model,
-		MaxTokens: 4000,
+		MaxTokens: 16000, // Increased for complex tickets (e.g., Next.js initialization with multiple files)
 		Messages:  []messagePart{{Role: "user", Content: prompt}},
 	}
 	payload, _ := json.Marshal(reqBody)
@@ -73,8 +73,16 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		return nil, fmt.Errorf("empty anthropic response")
 	}
 	raw := agent.SanitizeResponse(cg.Content[0].Text)
+	logger.Debug("AI response (sanitized)", "length", len(raw), "preview", raw[:min(500, len(raw))])
+
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
+		// Log the full response on error for debugging
+		logger.Error("Failed to parse AI response",
+			"error", err,
+			"response_length", len(raw),
+			"response_preview", raw[:min(1000, len(raw))],
+			"stop_reason", cg.StopReason)
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
 	}
 	// Decode base64 content if provided
@@ -87,4 +95,12 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		}
 	}
 	return changes, nil
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
