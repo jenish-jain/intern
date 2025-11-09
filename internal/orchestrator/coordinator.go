@@ -192,6 +192,24 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	ticketMetrics := NewTicketMetricsFromUsage(key, usageMetrics)
 	ticketMetrics.SetRetryCount(attempts)
 
+	// Estimate savings if smart context was used
+	if usageMetrics != nil && usedSmartContext {
+		// Estimate what full context would have cost
+		// Rough approximation: assume full context would be 3x larger
+		// (based on typical repository file counts vs selected files)
+		estimatedFullContextTokens := usageMetrics.InputTokens * 3
+		estimatedFullContextCost := ai.CalculateCost(estimatedFullContextTokens, usageMetrics.OutputTokens, &ai.ClaudeSonnet4)
+
+		// Save savings estimate
+		ticketMetrics.SetSavingsEstimate(estimatedFullContextCost)
+
+		logger.Debug("Smart context savings",
+			"ticket", key,
+			"estimated_full_cost", ai.FormatCost(estimatedFullContextCost),
+			"actual_cost", ai.FormatCost(usageMetrics.EstimatedCost),
+			"savings", ai.FormatCost(ticketMetrics.CostSavings))
+	}
+
 	// Update global metrics with token usage
 	if usageMetrics != nil {
 		c.Metrics.AddTokenUsage(
