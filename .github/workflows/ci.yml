@@ -16,8 +16,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Run CI
-      run: make ci
+    - name: Run vet
+      run: make vet
 
     - name: Update coverage report
       uses: ncruces/go-coverage-report@v0
