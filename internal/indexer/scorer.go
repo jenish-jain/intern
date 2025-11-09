@@ -33,7 +33,13 @@ func ScoreFiles(index *FileIndex, keywords []string) []FileScore {
 	return scores
 }
 
-// scoreFile calculates relevance score for a single file
+// scoreFile calculates relevance score for a single file based on keyword matches.
+// It uses a tiered scoring system:
+//   - Exact path match: +15 points
+//   - Path contains keyword: +8 points
+//   - Path segment matches keyword: +5 points
+//   - Segment contains keyword: +2 points
+// The final score is multiplied by a category-based multiplier.
 func scoreFile(path string, metadata FileMetadata, keywords []string) float64 {
 	score := 0.0
 
@@ -91,8 +97,13 @@ func scoreFile(path string, metadata FileMetadata, keywords []string) float64 {
 	return score
 }
 
-// getCategoryMultiplier returns a multiplier based on file category
-// Core files are most relevant, docs/tests are least relevant
+// getCategoryMultiplier returns a relevance multiplier based on file category.
+// Categories are prioritized as follows:
+//   - core: 1.5x (most important for understanding codebase)
+//   - config: 1.2x (often relevant for configuration-related tasks)
+//   - other: 1.0x (neutral)
+//   - test: 0.7x (less relevant for code generation)
+//   - doc: 0.5x (least relevant for code context)
 func getCategoryMultiplier(category string) float64 {
 	switch category {
 	case "core":

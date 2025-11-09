@@ -23,12 +23,16 @@ const url = "https://api.anthropic.com/v1/messages"
 const anthropicVersion = "2023-06-01"
 const model = "claude-sonnet-4-20250514"
 
+// Client is an implementation of the agent.Agent interface for Anthropic's Claude API.
+// It handles communication with the Anthropic API for code generation tasks.
 type Client struct {
-	APIKey string
-	Model  string
-	HTTP   *http.Client
+	APIKey string       // Anthropic API key for authentication
+	Model  string       // Claude model identifier to use (e.g., "claude-sonnet-4-20250514")
+	HTTP   *http.Client // HTTP client with configured timeout
 }
 
+// NewClient creates a new Anthropic API client with default settings.
+// The client is configured with a 60-second timeout and the latest Claude model.
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
