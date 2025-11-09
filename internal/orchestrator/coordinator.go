@@ -43,6 +43,34 @@ func (c *Coordinator) Run(ctx context.Context) {
 	_ = os.MkdirAll(workingDir, 0755)
 	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
 
+	// Print final summary and save metrics on shutdown
+	defer func() {
+		snapshot := c.Metrics.Snapshot()
+
+		// Skip if no tickets were processed
+		if snapshot.TicketsProcessed == 0 {
+			logger.Info("Agent shutting down (no tickets processed)")
+			return
+		}
+
+		logger.Info("Agent shutting down - generating final report")
+
+		// Print summary report to console
+		report := GenerateReport(snapshot)
+		fmt.Println("\n" + report)
+
+		// Save metrics to JSON
+		repoRoot := filepath.Join(workingDir, c.Cfg.GitHubRepo)
+		// Note: We don't have access to individual ticket metrics here yet
+		// This will be enhanced in a future iteration to collect them
+		metricsFile, err := SaveMetrics(snapshot, []TicketMetrics{}, repoRoot)
+		if err != nil {
+			logger.Error("Failed to save metrics", "error", err)
+		} else {
+			fmt.Printf("\nDetailed metrics saved to: %s\n\n", metricsFile)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -138,6 +166,8 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 }
 
 func (c *Coordinator) processTicket(ctx context.Context, key, summary, description string) error {
+	startTime := time.Now()
+
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
 	logger.Info("Creating branch", "branch", branchName)
 	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
@@ -148,26 +178,81 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 
 	// Use smart context builder with ticket description for better file selection
+	usedSmartContext := false
 	ctxStr, ctxErr := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles)
 	if ctxErr != nil {
 		// Fall back to simple context builder on error
 		logger.Warn("Smart context builder failed, falling back to simple builder", "error", ctxErr)
 		ctxStr = ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
+		c.Metrics.IncSimpleContextUsed()
+	} else {
+		usedSmartContext = true
+		c.Metrics.IncSmartContextUsed()
 	}
 
 	var changes []agent.CodeChange
+	var usageMetrics *agent.UsageMetrics
 	planErr, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-		ch, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
+		ch, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
 		if e != nil {
 			return MakeTransient(e)
 		}
 		changes = ch
+		usageMetrics = metrics
 		return nil
 	})
 	c.Metrics.AddRetries(attempts)
 	if planErr != nil {
 		c.Metrics.IncAIPlanFailures()
 		return fmt.Errorf("AI planning failed: %w", planErr)
+	}
+
+	// Update context strategy in usage metrics
+	if usageMetrics != nil {
+		if usedSmartContext {
+			usageMetrics.ContextStats.Strategy = "smart"
+		} else {
+			usageMetrics.ContextStats.Strategy = "simple"
+		}
+	}
+
+	// Create per-ticket metrics for tracking
+	ticketMetrics := NewTicketMetricsFromUsage(key, usageMetrics)
+	ticketMetrics.SetRetryCount(attempts)
+
+	// Estimate savings if smart context was used
+	if usageMetrics != nil && usedSmartContext {
+		// Estimate what full context would have cost
+		// Rough approximation: assume full context would be 3x larger
+		// (based on typical repository file counts vs selected files)
+		estimatedFullContextTokens := usageMetrics.InputTokens * 3
+		estimatedFullContextCost := ai.CalculateCost(estimatedFullContextTokens, usageMetrics.OutputTokens, &ai.ClaudeSonnet4)
+
+		// Save savings estimate
+		ticketMetrics.SetSavingsEstimate(estimatedFullContextCost)
+
+		logger.Debug("Smart context savings",
+			"ticket", key,
+			"estimated_full_cost", ai.FormatCost(estimatedFullContextCost),
+			"actual_cost", ai.FormatCost(usageMetrics.EstimatedCost),
+			"savings", ai.FormatCost(ticketMetrics.CostSavings))
+	}
+
+	// Update global metrics with token usage
+	if usageMetrics != nil {
+		c.Metrics.AddTokenUsage(
+			usageMetrics.InputTokens,
+			usageMetrics.OutputTokens,
+			usageMetrics.EstimatedCost,
+		)
+
+		// Log per-ticket cost and metrics
+		logger.Info("AI generated code",
+			"ticket", key,
+			"cost", ai.FormatCost(usageMetrics.EstimatedCost),
+			"input_tokens", ai.FormatTokens(usageMetrics.InputTokens),
+			"output_tokens", ai.FormatTokens(usageMetrics.OutputTokens),
+			"context", usageMetrics.ContextStats.Strategy)
 	}
 	valid, verr := validatePlannedChanges(repoRoot, changes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
 	if verr != nil {
@@ -229,10 +314,29 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	logger.Info("Created PR", "url", prURL)
 	c.Metrics.IncPRsCreated()
+
 	// Mark Done
 	if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
 		logger.Error("Failed to move ticket to Done", "error", err)
 	}
+
+	// Update metrics with execution time and files changed
+	executionTime := time.Since(startTime)
+	filesChanged := len(valid)
+
+	ticketMetrics.SetExecutionTime(executionTime)
+	ticketMetrics.SetFilesChanged(filesChanged)
+
 	c.Metrics.IncTicketsProcessed()
+	c.Metrics.AddExecutionTime(executionTime)
+	c.Metrics.AddFilesChanged(filesChanged)
+
+	// Log final ticket summary
+	logger.Info("Ticket completed",
+		"ticket", key,
+		"duration", executionTime.Round(time.Second),
+		"files_changed", filesChanged,
+		"pr_url", prURL)
+
 	return nil
 }

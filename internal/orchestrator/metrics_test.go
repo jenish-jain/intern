@@ -117,3 +117,65 @@ func TestMetrics_SnapshotConsistency(t *testing.T) {
 	assert.Equal(t, snapshot1.Retries, snapshot3.Retries)
 	assert.Equal(t, snapshot1.AIPlanFailures, snapshot3.AIPlanFailures)
 }
+
+func TestMetrics_CostTracking(t *testing.T) {
+	m := NewMetrics()
+
+	// Add token usage from multiple tickets
+	m.AddTokenUsage(5000, 2000, 0.045)
+	m.AddTokenUsage(10000, 5000, 0.125)
+
+	snapshot := m.Snapshot()
+
+	assert.Equal(t, int64(15000), snapshot.TotalInputTokens)
+	assert.Equal(t, int64(7000), snapshot.TotalOutputTokens)
+	assert.InDelta(t, 0.170, snapshot.TotalCost, 0.001)
+}
+
+func TestMetrics_ContextStrategyTracking(t *testing.T) {
+	m := NewMetrics()
+
+	m.IncSmartContextUsed()
+	m.IncSmartContextUsed()
+	m.IncSmartContextUsed()
+	m.IncSimpleContextUsed()
+
+	snapshot := m.Snapshot()
+
+	assert.Equal(t, int64(3), snapshot.SmartContextUsed)
+	assert.Equal(t, int64(1), snapshot.SimpleContextUsed)
+}
+
+func TestMetrics_Averages(t *testing.T) {
+	m := NewMetrics()
+
+	// Simulate 3 tickets
+	m.IncTicketsProcessed()
+	m.AddTokenUsage(6000, 3000, 0.060)
+
+	m.IncTicketsProcessed()
+	m.AddTokenUsage(9000, 6000, 0.120)
+
+	m.IncTicketsProcessed()
+	m.AddTokenUsage(3000, 1000, 0.020)
+
+	snapshot := m.Snapshot()
+
+	// Check averages
+	assert.InDelta(t, 0.200/3, snapshot.AvgCostPerTicket, 0.0001)
+	assert.InDelta(t, 18000.0/3, snapshot.AvgInputTokensPerTicket, 0.01)
+	assert.InDelta(t, 10000.0/3, snapshot.AvgOutputTokensPerTicket, 0.01)
+}
+
+func TestMetrics_ZeroDivisionAvoidance(t *testing.T) {
+	m := NewMetrics()
+
+	// Don't process any tickets
+	snapshot := m.Snapshot()
+
+	// All averages should be zero (not NaN or panic)
+	assert.Equal(t, 0.0, snapshot.AvgCostPerTicket)
+	assert.Equal(t, 0.0, snapshot.AvgInputTokensPerTicket)
+	assert.Equal(t, 0.0, snapshot.AvgOutputTokensPerTicket)
+	assert.Equal(t, 0.0, snapshot.AvgFilesPerTicket)
+}
