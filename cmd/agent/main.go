@@ -4,7 +4,9 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"intern/internal/ai/agent/anthropic"
 	"intern/internal/config"
@@ -64,8 +66,22 @@ func main() {
 
 	agent := anthropic.NewClient(cfg.AnthropicAPIKey)
 	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state)
+
+	// Set up signal handling for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		logger.Info("Received shutdown signal, shutting down gracefully...")
+		cancel()
+	}()
+
 	logger.Info("Starting AI Intern Agent MVP...")
-	coordinator.Run(context.Background())
+	coordinator.Run(ctx)
 }
 
 func writeSampleFiles() {
