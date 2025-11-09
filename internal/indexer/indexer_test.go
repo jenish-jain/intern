@@ -11,11 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// NOTE: Tests for unexported methods (shouldSkipDir, shouldSkipFile, categorizeFile, etc.)
-// were removed as they require exporting private implementation details.
-// These methods are indirectly tested through TestIndexer_BuildIndex which exercises
-// all the filtering and categorization logic.
-
 func TestIndexer_BuildIndex(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "indexer-build")
 	require.NoError(t, err)

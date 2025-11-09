@@ -62,7 +62,7 @@ func (c *githubClient) CloneRepository(ctx context.Context, destPath string) err
 
 	_, err := git.PlainCloneContext(ctx, destPath, false, &git.CloneOptions{
 		URL:      url,
-		Auth:     &http.BasicAuth{Username: c.token, Password: ""}, // Using token as username
+		Auth:     &http.BasicAuth{Username: c.owner, Password: c.token}, // Using token as password
 		Progress: os.Stdout,
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func (c *githubClient) SyncWithRemote(ctx context.Context) error {
 	}
 
 	err = w.PullContext(ctx, &git.PullOptions{
-		Auth:     &http.BasicAuth{Username: c.token, Password: ""},
+		Auth:     &http.BasicAuth{Username: c.owner, Password: c.token},
 		Progress: os.Stdout,
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
@@ -209,7 +209,7 @@ func (c *githubClient) Push(ctx context.Context, branchName string) error {
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
 	err = repo.PushContext(ctx, &git.PushOptions{
-		Auth:     &http.BasicAuth{Username: c.token, Password: ""},
+		Auth:     &http.BasicAuth{Username: c.owner, Password: c.token},
 		RefSpecs: []config.RefSpec{config.RefSpec(refspec)},
 	})
 	if err != nil && err != git.NoErrAlreadyUpToDate {
