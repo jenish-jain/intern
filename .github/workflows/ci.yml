@@ -2,9 +2,11 @@ name: Makefile CI
 on:
   pull_request:
     branches: [ "master" ]
+  push:
+    branches: [ "master" ]
 
 jobs:
-  build:
+  ci:
 
     runs-on: ubuntu-latest
 
@@ -20,7 +22,5 @@ jobs:
         report: true
         chart: true
         amend: true
-      if: |
-        matrix.os == 'ubuntu-latest' &&
-        github.event_name == 'push'  
+      if: github.event_name == 'push'  
       continue-on-error: true
