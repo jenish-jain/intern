@@ -18,6 +18,19 @@ const (
 	ProjectIndexName = "PROJECT_INDEX.md"
 )
 
+// Excluded directories that should be skipped during indexing
+var excludedDirs = []string{
+	".git", "vendor", "node_modules", ".idea", ".vscode",
+	"build", "dist", "out", ".ai-intern", "workspace",
+}
+
+// Binary and media file extensions that should be skipped during indexing
+var binaryExts = []string{
+	".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip",
+	".exe", ".bin", ".mp4", ".mov", ".dll", ".so", ".dylib",
+	".tar", ".gz", ".bz2", ".7z", ".rar",
+}
+
 // Indexer generates and manages repository file indexes
 type Indexer struct {
 	repoRoot string
@@ -86,10 +99,6 @@ func (idx *Indexer) BuildIndex() (*FileIndex, error) {
 // shouldSkipDir determines if a directory should be excluded from indexing
 func (idx *Indexer) shouldSkipDir(relPath string) bool {
 	lower := strings.ToLower(relPath)
-	excludedDirs := []string{
-		".git", "vendor", "node_modules", ".idea", ".vscode",
-		"build", "dist", "out", ".ai-intern", "workspace",
-	}
 
 	for _, excluded := range excludedDirs {
 		if lower == excluded || strings.HasPrefix(lower, excluded+"/") {
@@ -105,12 +114,6 @@ func (idx *Indexer) shouldSkipFile(relPath string) bool {
 	lower := strings.ToLower(relPath)
 
 	// Skip binary and media files
-	binaryExts := []string{
-		".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip",
-		".exe", ".bin", ".mp4", ".mov", ".dll", ".so", ".dylib",
-		".tar", ".gz", ".bz2", ".7z", ".rar",
-	}
-
 	for _, ext := range binaryExts {
 		if strings.HasSuffix(lower, ext) {
 			return true
