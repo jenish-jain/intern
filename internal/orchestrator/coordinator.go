@@ -43,6 +43,34 @@ func (c *Coordinator) Run(ctx context.Context) {
 	_ = os.MkdirAll(workingDir, 0755)
 	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
 
+	// Print final summary and save metrics on shutdown
+	defer func() {
+		snapshot := c.Metrics.Snapshot()
+
+		// Skip if no tickets were processed
+		if snapshot.TicketsProcessed == 0 {
+			logger.Info("Agent shutting down (no tickets processed)")
+			return
+		}
+
+		logger.Info("Agent shutting down - generating final report")
+
+		// Print summary report to console
+		report := GenerateReport(snapshot)
+		fmt.Println("\n" + report)
+
+		// Save metrics to JSON
+		repoRoot := filepath.Join(workingDir, c.Cfg.GitHubRepo)
+		// Note: We don't have access to individual ticket metrics here yet
+		// This will be enhanced in a future iteration to collect them
+		metricsFile, err := SaveMetrics(snapshot, []TicketMetrics{}, repoRoot)
+		if err != nil {
+			logger.Error("Failed to save metrics", "error", err)
+		} else {
+			fmt.Printf("\nDetailed metrics saved to: %s\n\n", metricsFile)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
