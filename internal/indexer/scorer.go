@@ -33,7 +33,13 @@ func ScoreFiles(index *FileIndex, keywords []string) []FileScore {
 	return scores
 }
 
-// scoreFile calculates relevance score for a single file
+// scoreFile calculates relevance score for a single file based on keyword matches.
+// It uses a tiered scoring system:
+//   - Exact path match: +15 points
+//   - Path contains keyword: +8 points
+//   - Path segment matches keyword: +5 points
+//   - Segment contains keyword: +2 points
+// The final score is multiplied by a category-based multiplier.
 func scoreFile(path string, metadata FileMetadata, keywords []string) float64 {
 	score := 0.0
 
@@ -91,8 +97,13 @@ func scoreFile(path string, metadata FileMetadata, keywords []string) float64 {
 	return score
 }
 
-// getCategoryMultiplier returns a multiplier based on file category
-// Core files are most relevant, docs/tests are least relevant
+// getCategoryMultiplier returns a relevance multiplier based on file category.
+// Categories are prioritized as follows:
+//   - core: 1.5x (most important for understanding codebase)
+//   - config: 1.2x (often relevant for configuration-related tasks)
+//   - other: 1.0x (neutral)
+//   - test: 0.7x (less relevant for code generation)
+//   - doc: 0.5x (least relevant for code context)
 func getCategoryMultiplier(category string) float64 {
 	switch category {
 	case "core":
@@ -121,43 +132,4 @@ func SelectTopFiles(scores []FileScore, n int) []FileScore {
 	}
 
 	return scores[:n]
-}
-
-// GetScoreDistribution returns statistics about score distribution
-// Useful for debugging and tuning scoring algorithm
-func GetScoreDistribution(scores []FileScore) ScoreStats {
-	if len(scores) == 0 {
-		return ScoreStats{}
-	}
-
-	stats := ScoreStats{
-		Total: len(scores),
-		Min:   scores[len(scores)-1].Score, // Already sorted
-		Max:   scores[0].Score,
-	}
-
-	sum := 0.0
-	for _, s := range scores {
-		sum += s.Score
-	}
-	stats.Mean = sum / float64(len(scores))
-
-	// Calculate median
-	mid := len(scores) / 2
-	if len(scores)%2 == 0 {
-		stats.Median = (scores[mid-1].Score + scores[mid].Score) / 2
-	} else {
-		stats.Median = scores[mid].Score
-	}
-
-	return stats
-}
-
-// ScoreStats contains statistics about score distribution
-type ScoreStats struct {
-	Total  int     // Total number of scored files
-	Min    float64 // Minimum score
-	Max    float64 // Maximum score
-	Mean   float64 // Average score
-	Median float64 // Median score
 }

@@ -3,11 +3,13 @@ package ai
 import (
 	"errors"
 	"fmt"
-	"intern/internal/indexer"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"intern/internal/indexer"
+	"intern/internal/util"
 )
 
 // BuildRepoContext reads a subset of files (small text/code files) to provide
@@ -107,7 +109,7 @@ func BuildSmartRepoContext(repoRoot, ticketDescription string, maxFiles int) (st
 	// Build context from top files
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# Repository Context (Smart Selection)\n"))
-	sb.WriteString(fmt.Sprintf("# Based on keywords: %v\n", keywords[:min(5, len(keywords))]))
+	sb.WriteString(fmt.Sprintf("# Based on keywords: %v\n", keywords[:util.Min(5, len(keywords))]))
 	sb.WriteString(fmt.Sprintf("# Selected %d most relevant files\n\n", len(topScores)))
 
 	for _, fileScore := range topScores {
@@ -131,12 +133,4 @@ func BuildSmartRepoContext(repoRoot, ticketDescription string, maxFiles int) (st
 	}
 
 	return sb.String(), nil
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

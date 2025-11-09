@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"intern/internal/ai/agent"
+	"intern/internal/util"
 
 	"github.com/jenish-jain/logger"
 )
@@ -22,12 +23,16 @@ const url = "https://api.anthropic.com/v1/messages"
 const anthropicVersion = "2023-06-01"
 const model = "claude-sonnet-4-20250514"
 
+// Client is an implementation of the agent.Agent interface for Anthropic's Claude API.
+// It handles communication with the Anthropic API for code generation tasks.
 type Client struct {
-	APIKey string
-	Model  string
-	HTTP   *http.Client
+	APIKey string       // Anthropic API key for authentication
+	Model  string       // Claude model identifier to use (e.g., "claude-sonnet-4-20250514")
+	HTTP   *http.Client // HTTP client with configured timeout
 }
 
+// NewClient creates a new Anthropic API client with default settings.
+// The client is configured with a 60-second timeout and the latest Claude model.
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
@@ -46,7 +51,10 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		MaxTokens: 16000, // Increased for complex tickets (e.g., Next.js initialization with multiple files)
 		Messages:  []messagePart{{Role: "user", Content: prompt}},
 	}
-	payload, _ := json.Marshal(reqBody)
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
@@ -62,7 +70,10 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
+		}
 		return nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
 	}
 	var cg codeGenResponse
@@ -73,7 +84,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		return nil, fmt.Errorf("empty anthropic response")
 	}
 	raw := agent.SanitizeResponse(cg.Content[0].Text)
-	logger.Debug("AI response (sanitized)", "length", len(raw), "preview", raw[:min(500, len(raw))])
+	logger.Debug("AI response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
@@ -81,7 +92,7 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		logger.Error("Failed to parse AI response",
 			"error", err,
 			"response_length", len(raw),
-			"response_preview", raw[:min(1000, len(raw))],
+			"response_preview", raw[:util.Min(1000, len(raw))],
 			"stop_reason", cg.StopReason)
 		return nil, fmt.Errorf("invalid JSON from model: %w", err)
 	}
@@ -95,12 +106,4 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 		}
 	}
 	return changes, nil
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

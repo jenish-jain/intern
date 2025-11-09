@@ -100,7 +100,9 @@ func ExtractMinimalContext(filePath string) (string, error) {
 	return sb.String(), nil
 }
 
-// writeSpec writes a single spec (type, const, var)
+// writeSpec writes a single AST spec (type, const, or var declaration) to the string builder.
+// It handles TypeSpec (type definitions), ValueSpec (const/var), and ImportSpec (imports).
+// For ValueSpec, actual values are replaced with "..." to omit implementation details.
 func writeSpec(sb *strings.Builder, spec ast.Spec, fset *token.FileSet) {
 	switch s := spec.(type) {
 	case *ast.TypeSpec:
@@ -146,7 +148,9 @@ func writeSpec(sb *strings.Builder, spec ast.Spec, fset *token.FileSet) {
 	}
 }
 
-// writeExpr writes a type expression
+// writeExpr writes a Go type expression to the string builder.
+// It recursively handles all Go type expressions including pointers, arrays, maps,
+// structs, interfaces, function types, selectors, channels, and ellipsis.
 func writeExpr(sb *strings.Builder, expr ast.Expr, fset *token.FileSet) {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -220,7 +224,8 @@ func writeExpr(sb *strings.Builder, expr ast.Expr, fset *token.FileSet) {
 	}
 }
 
-// writeField writes a field (function parameter, return value, etc.)
+// writeField writes a generic AST field (function parameter, return value, etc.) to the string builder.
+// It includes field names, types, and inline comments if present.
 func writeField(sb *strings.Builder, field *ast.Field, fset *token.FileSet) {
 	if field.Doc != nil {
 		sb.WriteString(field.Doc.Text())
@@ -249,7 +254,9 @@ func writeField(sb *strings.Builder, field *ast.Field, fset *token.FileSet) {
 	}
 }
 
-// writeFieldInStruct writes a struct field
+// writeFieldInStruct writes a struct field to the string builder.
+// It handles function-type fields specially by including the "func" keyword,
+// and preserves struct tags (e.g., `json:"name"`) if present.
 func writeFieldInStruct(sb *strings.Builder, field *ast.Field, fset *token.FileSet) {
 	if field.Doc != nil {
 		sb.WriteString(field.Doc.Text())
@@ -290,7 +297,9 @@ func writeFieldInStruct(sb *strings.Builder, field *ast.Field, fset *token.FileS
 	}
 }
 
-// writeFieldInInterface writes an interface method
+// writeFieldInInterface writes an interface method signature to the string builder.
+// It omits the "func" keyword (which is implicit in interface methods) and
+// handles embedded interfaces (anonymous fields without names).
 func writeFieldInInterface(sb *strings.Builder, field *ast.Field, fset *token.FileSet) {
 	if field.Doc != nil {
 		sb.WriteString(field.Doc.Text())
@@ -324,7 +333,9 @@ func writeFieldInInterface(sb *strings.Builder, field *ast.Field, fset *token.Fi
 	}
 }
 
-// writeFuncType writes a function type (parameters and return values)
+// writeFuncType writes a function type signature (parameters and return values) to the string builder.
+// It handles multiple parameters, multiple return values, and named/unnamed parameters.
+// Return values with multiple entries or named returns are wrapped in parentheses.
 func writeFuncType(sb *strings.Builder, ft *ast.FuncType, fset *token.FileSet) {
 	sb.WriteString("(")
 	if ft.Params != nil {
@@ -354,8 +365,9 @@ func writeFuncType(sb *strings.Builder, ft *ast.FuncType, fset *token.FileSet) {
 	}
 }
 
-// extractNonGoContext extracts context from non-Go files
-// For config files, docs, etc., return first N lines with metadata
+// extractNonGoContext extracts context from non-Go files (config, docs, etc.).
+// For small files (<10KB), it returns the full content.
+// For larger files, it returns the first 100 lines to avoid excessive context.
 func extractNonGoContext(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
