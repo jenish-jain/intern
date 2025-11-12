@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"intern/internal/ai/agent/anthropic"
 	"intern/internal/config"
 	"intern/internal/indexer"
 	"intern/internal/orchestrator"
+	"intern/internal/provider"
 	"intern/internal/repository"
 	"intern/internal/repository/github"
 	"intern/internal/ticketing"
@@ -64,7 +64,14 @@ func main() {
 	state := orchestrator.NewState(stateFile)
 	_ = state.Load() // ignore error if file doesn't exist
 
-	agent := anthropic.NewClient(cfg.AnthropicAPIKey)
+	// Initialize AI agent based on configured provider (anthropic or ollama)
+	agent, err := provider.NewAgent(cfg)
+	if err != nil {
+		logger.Error("Failed to initialize AI agent: %v", err)
+		os.Exit(1)
+	}
+	logger.Info("Initialized AI provider", "provider", cfg.AIProvider)
+
 	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state)
 
 	// Set up signal handling for graceful shutdown
@@ -98,7 +105,17 @@ GITHUB_TOKEN="your-github-token"
 GITHUB_OWNER="company"
 GITHUB_REPO="main-repo"
 
+# AI Provider Configuration
+# Options: "anthropic" (cloud API) or "ollama" (local LLM)
+AI_PROVIDER="anthropic"
+
+# Anthropic Configuration (required if AI_PROVIDER=anthropic)
 ANTHROPIC_API_KEY="your-anthropic-api-key"
+
+# Ollama Configuration (required if AI_PROVIDER=ollama)
+# Make sure Ollama is running locally: https://ollama.ai
+OLLAMA_BASE_URL="http://localhost:11434"
+OLLAMA_MODEL="qwen2.5-coder:7b"  # Options: qwen2.5-coder:7b, deepseek-coder:6.7b, codellama:13b
 
 AGENT_USERNAME="ai-intern"
 POLLING_INTERVAL="30s"
