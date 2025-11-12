@@ -5,6 +5,7 @@ import (
 
 	"intern/internal/ai/agent"
 	"intern/internal/ai/agent/anthropic"
+	"intern/internal/ai/agent/ollama"
 	"intern/internal/config"
 )
 
@@ -26,8 +27,13 @@ func NewAgent(cfg *config.Config) (agent.Agent, error) {
 		return anthropic.NewClient(cfg.AnthropicAPIKey), nil
 
 	case "ollama":
-		// Ollama implementation will be added in the next step
-		return nil, fmt.Errorf("Ollama provider not yet implemented")
+		if cfg.OllamaModel == "" {
+			return nil, fmt.Errorf("Ollama model is required for provider 'ollama'")
+		}
+		if cfg.OllamaBaseURL == "" {
+			return nil, fmt.Errorf("Ollama base URL is required for provider 'ollama'")
+		}
+		return ollama.NewClient(cfg.OllamaBaseURL, cfg.OllamaModel), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported AI provider: %s (supported: anthropic, ollama)", cfg.AIProvider)
