@@ -21,6 +21,11 @@ type Config struct {
 
 	AnthropicAPIKey string
 
+	// AI Provider configuration
+	AIProvider     string // "anthropic" or "ollama"
+	OllamaBaseURL  string // Ollama server URL (default: http://localhost:11434)
+	OllamaModel    string // Ollama model name (e.g., qwen2.5-coder:7b)
+
 	AgentUsername        string
 	PollingInterval      string
 	MaxConcurrentTickets int
@@ -60,6 +65,10 @@ func LoadConfig() (*Config, error) {
 
 		AnthropicAPIKey: viper.GetString("ANTHROPIC_API_KEY"),
 
+		AIProvider:    viper.GetString("AI_PROVIDER"),
+		OllamaBaseURL: viper.GetString("OLLAMA_BASE_URL"),
+		OllamaModel:   viper.GetString("OLLAMA_MODEL"),
+
 		AgentUsername:        viper.GetString("AGENT_USERNAME"),
 		PollingInterval:      viper.GetString("POLLING_INTERVAL"),
 		MaxConcurrentTickets: viper.GetInt("MAX_CONCURRENT_TICKETS"),
@@ -78,6 +87,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Defaults
+	if cfg.AIProvider == "" {
+		cfg.AIProvider = "anthropic" // Default to Anthropic for backwards compatibility
+	}
+	if cfg.OllamaBaseURL == "" {
+		cfg.OllamaBaseURL = "http://localhost:11434"
+	}
 	if cfg.ContextMaxFiles <= 0 {
 		cfg.ContextMaxFiles = 40
 	}
@@ -111,9 +126,24 @@ func (c *Config) Validate() error {
 	if c.GitHubToken == "" || c.GitHubOwner == "" || c.GitHubRepo == "" {
 		return fmt.Errorf("missing GitHub configuration")
 	}
-	if c.AnthropicAPIKey == "" {
-		return fmt.Errorf("missing Anthropic API key")
+
+	// Validate AI provider configuration
+	switch c.AIProvider {
+	case "anthropic":
+		if c.AnthropicAPIKey == "" {
+			return fmt.Errorf("missing Anthropic API key (required when AI_PROVIDER=anthropic)")
+		}
+	case "ollama":
+		if c.OllamaModel == "" {
+			return fmt.Errorf("missing Ollama model (required when AI_PROVIDER=ollama)")
+		}
+		if c.OllamaBaseURL == "" {
+			return fmt.Errorf("missing Ollama base URL")
+		}
+	default:
+		return fmt.Errorf("unsupported AI provider: %s (supported: anthropic, ollama)", c.AIProvider)
 	}
+
 	if c.AgentUsername == "" {
 		return fmt.Errorf("missing agent username")
 	}
