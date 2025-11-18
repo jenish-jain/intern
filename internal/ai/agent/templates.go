@@ -19,6 +19,7 @@ func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoCon
 	if opts.AllowBase64 {
 		rules = append(rules, "You MAY use {\"content_b64\":\"<base64>\"} instead of content for large or complex content.")
 	}
+	rules = append(rules, "NEVER modify go.mod or go.sum files - these are managed by Go tooling (go get, go mod tidy). Dependencies are already configured.")
 	rules = append(rules, "try compiling code if possible before creating a changeset.")
 	rules = append(rules, "Use POSIX-style relative paths under repo root.")
 
@@ -41,6 +42,7 @@ func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput strin
 	if opts.AllowBase64 {
 		rules = append(rules, "You MAY use {\"content_b64\":\"<base64>\"} instead of content for large or complex content.")
 	}
+	rules = append(rules, "NEVER modify go.mod or go.sum files - these are managed by Go tooling. If errors mention missing go.sum entries, ignore them - the build system will handle this.")
 	rules = append(rules, "Fix ONLY the errors shown below. Do not make unrelated changes.")
 	rules = append(rules, "Provide complete file content for each file that needs fixing.")
 	rules = append(rules, "Use POSIX-style relative paths under repo root.")
