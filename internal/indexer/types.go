@@ -4,11 +4,12 @@ import "time"
 
 // FileIndex represents the complete index of a repository
 type FileIndex struct {
-	Version   string                  `json:"version"`
-	IndexedAt time.Time               `json:"indexed_at"`
-	RepoRoot  string                  `json:"repo_root"`
-	Files     map[string]FileMetadata `json:"files"`
-	Modules   map[string][]string     `json:"modules"`
+	Version       string                  `json:"version"`
+	IndexedAt     time.Time               `json:"indexed_at"`
+	RepoRoot      string                  `json:"repo_root"`
+	GitCommitHash string                  `json:"git_commit_hash"` // Git commit at indexing time
+	Files         map[string]FileMetadata `json:"files"`
+	Modules       map[string][]string     `json:"modules"`
 }
 
 // FileMetadata contains metadata about a single file

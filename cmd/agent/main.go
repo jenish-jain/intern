@@ -173,12 +173,19 @@ func buildIndex() {
 
 	logger.Info("Indexing repository", "path", repoRoot)
 
-	// Build index
+	// Build or update index incrementally
 	idx := indexer.New(repoRoot)
-	fileIndex, err := idx.BuildIndex()
+	fileIndex, wasUpdated, err := idx.RebuildIfStale()
 	if err != nil {
 		logger.Error("Failed to build index", "error", err)
 		os.Exit(1)
+	}
+
+	if !wasUpdated {
+		logger.Info("Index is already up to date")
+		indexPath := filepath.Join(repoRoot, indexer.IndexDirName, indexer.IndexFileName)
+		logger.Info("Using existing index", "path", indexPath)
+		return
 	}
 
 	logger.Info("Index built successfully", "files", len(fileIndex.Files), "modules", len(fileIndex.Modules))
