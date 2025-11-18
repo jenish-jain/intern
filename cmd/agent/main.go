@@ -142,6 +142,13 @@ SELF_HEAL_ON_BUILD=false     # Retry on build failures (usually not needed for G
 
 # Operational Mode
 DRY_RUN=false  # If true, process tickets but don't create PRs (preview mode)
+
+# Metrics Configuration
+METRICS_ENABLED=false  # Enable HTTP metrics server with Prometheus format
+METRICS_PORT=9090      # Port for metrics server (default: 9090)
+# Access metrics at http://localhost:9090/metrics (Prometheus format)
+# Access dashboard at http://localhost:9090/ (web UI)
+# Access health check at http://localhost:9090/health
 `), 0644)
 
 	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)

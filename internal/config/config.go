@@ -53,6 +53,10 @@ type Config struct {
 	SelfHealOnBuild      bool // Retry on build failures
 
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
+
+	// Metrics server configuration
+	MetricsEnabled bool // Enable HTTP metrics server
+	MetricsPort    int  // Port for metrics server (default: 9090)
 }
 
 func LoadConfig() (*Config, error) {
@@ -105,6 +109,9 @@ func LoadConfig() (*Config, error) {
 		SelfHealOnBuild:     viper.GetBool("SELF_HEAL_ON_BUILD"),
 
 		DryRun: viper.GetBool("DRY_RUN"),
+
+		MetricsEnabled: viper.GetBool("METRICS_ENABLED"),
+		MetricsPort:    viper.GetInt("METRICS_PORT"),
 	}
 
 	// Defaults
@@ -133,6 +140,12 @@ func LoadConfig() (*Config, error) {
 	}
 	// SelfHealEnabled defaults to false (opt-in)
 	// SelfHealOnTests, SelfHealOnVet, SelfHealOnBuild default to false
+
+	// Metrics defaults
+	if cfg.MetricsPort <= 0 {
+		cfg.MetricsPort = 9090 // Default Prometheus port
+	}
+	// MetricsEnabled defaults to false (opt-in)
 	allowed := viper.GetString("ALLOWED_WRITE_DIRS")
 	if strings.TrimSpace(allowed) == "" {
 		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs", "config", "."}

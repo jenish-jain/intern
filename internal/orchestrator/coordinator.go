@@ -43,6 +43,16 @@ func (c *Coordinator) Run(ctx context.Context) {
 	_ = os.MkdirAll(workingDir, 0755)
 	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
 
+	// Start metrics server if enabled
+	if c.Cfg.MetricsEnabled {
+		metricsServer := NewMetricsServer(c.Metrics, c.Cfg.MetricsPort)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil {
+				logger.Error("Metrics server failed", "error", err)
+			}
+		}()
+	}
+
 	// Print final summary and save metrics on shutdown
 	defer func() {
 		snapshot := c.Metrics.Snapshot()
