@@ -133,6 +133,13 @@ CONTEXT_CACHE_TTL=1h         # Cache time-to-live (e.g., "1h", "30m")
 PLAN_MAX_FILES=10
 ALLOWED_WRITE_DIRS="internal,cmd,pkg,docs,config,."
 
+# Self-Healing Configuration
+SELF_HEAL_ENABLED=false      # Enable AI-powered self-healing for failed quality gates
+SELF_HEAL_MAX_ATTEMPTS=3     # Maximum healing attempts (default: 3)
+SELF_HEAL_ON_TESTS=true      # Retry on test failures
+SELF_HEAL_ON_VET=true        # Retry on vet failures
+SELF_HEAL_ON_BUILD=false     # Retry on build failures (usually not needed for Go)
+
 # Operational Mode
 DRY_RUN=false  # If true, process tickets but don't create PRs (preview mode)
 `), 0644)

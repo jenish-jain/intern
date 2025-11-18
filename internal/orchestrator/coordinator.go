@@ -283,11 +283,50 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		logger.Info("No effective changes; skipping push/PR", "key", key)
 		return nil
 	}
-	// quality gates before push/PR
-	// reuse existing repoRoot
+
+	// Run self-healing pipeline (includes quality gates)
+	healResult, err := c.selfHealingPipeline(ctx, key, summary, valid, repoRoot)
+	if err != nil {
+		logger.Error("Self-healing pipeline failed", "key", key, "error", err)
+		return fmt.Errorf("self-healing failed: %w", err)
+	}
+
+	// Track healing metrics
+	if len(healResult.Attempts) > 0 {
+		c.Metrics.AddHealAttempts(len(healResult.Attempts))
+		if healResult.Success {
+			c.Metrics.IncHealSuccesses()
+		} else {
+			c.Metrics.IncHealFailures()
+		}
+	}
+
+	// If healing failed, skip push/PR
+	if !healResult.Success {
+		logger.Error("Quality gates failed after healing attempts; skipping push/PR",
+			"key", key,
+			"attempts", healResult.TotalAttempts,
+			"cost", healResult.TotalCost)
+		return nil
+	}
+
+	// If healing was needed and succeeded, commit the fixes
+	if len(healResult.Attempts) > 0 {
+		if err := c.Repository.Commit(ctx, fmt.Sprintf("fix(%s): self-healing fixes after %d attempts", key, healResult.TotalAttempts)); err != nil {
+			logger.Warn("Failed to commit healing fixes", "error", err)
+			// Continue anyway - fixes are already applied
+		}
+		logger.Info("Self-healing succeeded, fixes committed",
+			"key", key,
+			"attempts", healResult.TotalAttempts,
+			"cost", healResult.TotalCost)
+	}
+
+	// Run final quality gates check for PR notes (should pass now)
 	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
 	if !ok {
-		logger.Error("Quality gates failed; skipping push/PR", "key", key)
+		// This shouldn't happen after successful healing, but check anyway
+		logger.Error("Quality gates failed after successful healing; skipping push/PR", "key", key)
 		return nil
 	}
 	// Check for dry-run mode

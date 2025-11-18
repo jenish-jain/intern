@@ -45,6 +45,13 @@ type Config struct {
 	RunTestsBeforePR bool
 	RunVetBeforePR   bool
 
+	// Self-healing configuration
+	SelfHealEnabled      bool // Enable self-healing for failed quality gates
+	SelfHealMaxAttempts  int  // Maximum healing attempts (default: 3)
+	SelfHealOnTests      bool // Retry on test failures
+	SelfHealOnVet        bool // Retry on vet failures
+	SelfHealOnBuild      bool // Retry on build failures
+
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 }
 
@@ -91,6 +98,12 @@ func LoadConfig() (*Config, error) {
 		RunTestsBeforePR: viper.GetBool("RUN_TESTS_BEFORE_PR"),
 		RunVetBeforePR:   viper.GetBool("RUN_VET_BEFORE_PR"),
 
+		SelfHealEnabled:     viper.GetBool("SELF_HEAL_ENABLED"),
+		SelfHealMaxAttempts: viper.GetInt("SELF_HEAL_MAX_ATTEMPTS"),
+		SelfHealOnTests:     viper.GetBool("SELF_HEAL_ON_TESTS"),
+		SelfHealOnVet:       viper.GetBool("SELF_HEAL_ON_VET"),
+		SelfHealOnBuild:     viper.GetBool("SELF_HEAL_ON_BUILD"),
+
 		DryRun: viper.GetBool("DRY_RUN"),
 	}
 
@@ -114,6 +127,12 @@ func LoadConfig() (*Config, error) {
 	if cfg.PlanMaxFiles <= 0 {
 		cfg.PlanMaxFiles = 20
 	}
+	// Self-healing defaults
+	if cfg.SelfHealMaxAttempts <= 0 {
+		cfg.SelfHealMaxAttempts = 3 // Default: 3 healing attempts
+	}
+	// SelfHealEnabled defaults to false (opt-in)
+	// SelfHealOnTests, SelfHealOnVet, SelfHealOnBuild default to false
 	allowed := viper.GetString("ALLOWED_WRITE_DIRS")
 	if strings.TrimSpace(allowed) == "" {
 		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs", "config", "."}

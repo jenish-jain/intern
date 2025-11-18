@@ -25,6 +25,11 @@ type Metrics struct {
 	smartContextUsed  int64
 	simpleContextUsed int64
 
+	// Self-healing metrics
+	healAttempts  int64 // Total healing attempts across all tickets
+	healSuccesses int64 // Tickets successfully healed
+	healFailures  int64 // Tickets that failed healing
+
 	// Performance tracking (using milliseconds for atomic operations)
 	totalExecutionTimeMs int64
 	totalFilesChanged    int64
@@ -64,6 +69,15 @@ func (m *Metrics) AddTokenUsage(inputTokens, outputTokens int, cost float64) {
 func (m *Metrics) IncSmartContextUsed()  { atomic.AddInt64(&m.smartContextUsed, 1) }
 func (m *Metrics) IncSimpleContextUsed() { atomic.AddInt64(&m.simpleContextUsed, 1) }
 
+// Self-healing tracking
+func (m *Metrics) AddHealAttempts(n int) {
+	if n > 0 {
+		atomic.AddInt64(&m.healAttempts, int64(n))
+	}
+}
+func (m *Metrics) IncHealSuccesses() { atomic.AddInt64(&m.healSuccesses, 1) }
+func (m *Metrics) IncHealFailures()  { atomic.AddInt64(&m.healFailures, 1) }
+
 // Performance tracking
 func (m *Metrics) AddExecutionTime(d time.Duration) {
 	atomic.AddInt64(&m.totalExecutionTimeMs, d.Milliseconds())
@@ -90,6 +104,11 @@ type MetricsSnapshot struct {
 	// Context strategy
 	SmartContextUsed  int64
 	SimpleContextUsed int64
+
+	// Self-healing
+	HealAttempts  int64
+	HealSuccesses int64
+	HealFailures  int64
 
 	// Performance
 	TotalExecutionTime time.Duration
@@ -141,6 +160,9 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		TotalCost:         totalCost,
 		SmartContextUsed:  atomic.LoadInt64(&m.smartContextUsed),
 		SimpleContextUsed: atomic.LoadInt64(&m.simpleContextUsed),
+		HealAttempts:      atomic.LoadInt64(&m.healAttempts),
+		HealSuccesses:     atomic.LoadInt64(&m.healSuccesses),
+		HealFailures:      atomic.LoadInt64(&m.healFailures),
 		TotalExecutionTime: totalExecutionTime,
 		AvgExecutionTime:   avgExecTime,
 		TotalFilesChanged:  totalFilesChanged,
