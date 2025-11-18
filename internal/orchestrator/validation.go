@@ -34,6 +34,11 @@ func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs
 			logger.Debug("Skipping path with traversal", "path", clean)
 			continue
 		}
+		// NEVER allow modifications to go.mod or go.sum - these are managed by Go tooling
+		if clean == "go.mod" || clean == "go.sum" {
+			logger.Warn("Rejecting attempt to modify Go dependency file", "path", clean)
+			continue
+		}
 		// Enforce allowlist
 		first := firstSegment(clean)
 		// Allow root-level files if "." is in allowedDirs

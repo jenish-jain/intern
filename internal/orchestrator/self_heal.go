@@ -102,8 +102,19 @@ func (c *Coordinator) tryHealErrors(
 		"fixes", len(fixes),
 		"cost", metrics.EstimatedCost)
 
-	// Apply the fixes
-	for _, change := range fixes {
+	// Validate the fixes before applying (reject go.mod/go.sum, path traversal, etc.)
+	validatedFixes, valErr := validatePlannedChanges(repoPath, fixes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
+	if valErr != nil {
+		return nil, fmt.Errorf("fix validation failed: %w", valErr)
+	}
+
+	logger.Info("Validated healing fixes",
+		"ticket", ticketKey,
+		"original_fixes", len(fixes),
+		"validated_fixes", len(validatedFixes))
+
+	// Apply the validated fixes
+	for _, change := range validatedFixes {
 		if err := applyCodeChange(repoPath, change); err != nil {
 			return nil, fmt.Errorf("failed to apply fix for %s: %w", change.Path, err)
 		}
@@ -113,7 +124,7 @@ func (c *Coordinator) tryHealErrors(
 		Success:      false, // Will be updated after validation
 		ErrorType:    errorType,
 		ErrorOutput:  errorOutput,
-		FixedChanges: fixes,
+		FixedChanges: validatedFixes, // Use validated fixes, not raw AI output
 		Metrics:      metrics,
 	}, nil
 }
@@ -166,6 +177,20 @@ func (c *Coordinator) selfHealingPipeline(
 		if !hasError && c.Cfg.SelfHealOnVet {
 			output, err := runGoVet(ctx, repoPath)
 			if err != nil {
+				// Check if this is a go.sum checksum mismatch error (can't be healed by AI)
+				if strings.Contains(output, "go.sum") && strings.Contains(output, "checksum mismatch") {
+					logger.Error("Go dependency checksum mismatch detected - requires manual intervention",
+						"ticket", ticketKey,
+						"hint", "Run 'go mod tidy' or 'go get -u' to fix go.sum")
+					result.Success = false
+					result.Attempts = append(result.Attempts, HealResult{
+						Attempt:     attempt,
+						Success:     false,
+						ErrorType:   "vet",
+						ErrorOutput: "go.sum checksum mismatch (not healable by AI)",
+					})
+					return result, nil
+				}
 				errorType = "vet"
 				errorOutput = output
 				hasError = true
