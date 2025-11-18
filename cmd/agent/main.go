@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 func main() {
 	initFlag := flag.Bool("init", false, "initialize sample config and state files")
 	buildIndexFlag := flag.Bool("build-index", false, "build file index for smart context selection")
+	statusFlag := flag.Bool("status", false, "show current agent status and metrics")
+	metricsFlag := flag.Bool("metrics", false, "show detailed metrics summary")
 	flag.Parse()
 
 	logger.Init("debug")
@@ -35,6 +38,16 @@ func main() {
 
 	if *buildIndexFlag {
 		buildIndex()
+		return
+	}
+
+	if *statusFlag {
+		showStatus()
+		return
+	}
+
+	if *metricsFlag {
+		showMetrics()
 		return
 	}
 
@@ -216,4 +229,134 @@ func buildIndex() {
 	for category, count := range categoryCounts {
 		logger.Info("  - "+category, "count", count)
 	}
+}
+
+func showStatus() {
+	logger.Info("Checking agent status...")
+
+	// Load config
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logger.Error("Failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	// Load state
+	stateFile := "agent_state.jsonc"
+	state := orchestrator.NewState(stateFile)
+	if err := state.Load(); err != nil {
+		logger.Warn("Failed to load state", "error", err)
+	}
+
+	// Try to load metrics if available
+	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	if workingDir == "" {
+		workingDir = cfg.WorkingDir
+		if workingDir == "" {
+			workingDir = "./workspace"
+		}
+	}
+	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
+	metricsPath := filepath.Join(repoRoot, ".ai-intern", "metrics.json")
+
+	fmt.Println("\n=== AI Intern Agent Status ===")
+	fmt.Printf("\nConfiguration:\n")
+	fmt.Printf("  AI Provider:     %s\n", cfg.AIProvider)
+	if cfg.AIProvider == "ollama" {
+		fmt.Printf("  Ollama Model:    %s\n", cfg.OllamaModel)
+		fmt.Printf("  Ollama URL:      %s\n", cfg.OllamaBaseURL)
+	}
+	fmt.Printf("  GitHub Repo:     %s/%s\n", cfg.GitHubOwner, cfg.GitHubRepo)
+	fmt.Printf("  JIRA Project:    %s\n", cfg.JiraProject)
+	fmt.Printf("  Working Dir:     %s\n", workingDir)
+	fmt.Printf("  Max Concurrent:  %d\n", cfg.MaxConcurrentTickets)
+	fmt.Printf("  Polling Interval: %s\n", cfg.PollingInterval)
+
+	fmt.Printf("\nFeatures:\n")
+	fmt.Printf("  Context Caching:  %v\n", cfg.ContextCacheEnabled)
+	fmt.Printf("  Self-Healing:     %v\n", cfg.SelfHealEnabled)
+	fmt.Printf("  Metrics Server:   %v", cfg.MetricsEnabled)
+	if cfg.MetricsEnabled {
+		fmt.Printf(" (port %d)", cfg.MetricsPort)
+	}
+	fmt.Println()
+	fmt.Printf("  Dry Run Mode:     %v\n", cfg.DryRun)
+
+	fmt.Printf("\nProcessed Tickets: %d\n", len(state.Processed))
+
+	// Try to show latest metrics if available
+	if _, err := os.Stat(metricsPath); err == nil {
+		output, err := orchestrator.LoadMetrics(metricsPath)
+		if err == nil {
+			fmt.Printf("\nLatest Metrics (from %s):\n", output.RunMetadata.Timestamp)
+			fmt.Printf("  Tickets Processed: %d\n", output.Summary.TicketsProcessed)
+			fmt.Printf("  PRs Created:       %d\n", output.Summary.PRsCreated)
+			fmt.Printf("  Total Cost:        $%.2f\n", output.Summary.TotalCost)
+		}
+	}
+
+	fmt.Println("\n=== End Status ===\n")
+}
+
+func showMetrics() {
+	logger.Info("Loading metrics...")
+
+	// Load config to find metrics file
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logger.Error("Failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	if workingDir == "" {
+		workingDir = cfg.WorkingDir
+		if workingDir == "" {
+			workingDir = "./workspace"
+		}
+	}
+	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
+	metricsPath := filepath.Join(repoRoot, ".ai-intern", "metrics.json")
+
+	// Check if metrics file exists
+	if _, err := os.Stat(metricsPath); os.IsNotExist(err) {
+		logger.Error("No metrics file found", "path", metricsPath)
+		fmt.Println("\nNo metrics available yet. Run the agent to generate metrics.")
+		os.Exit(1)
+	}
+
+	// Load metrics
+	output, err := orchestrator.LoadMetrics(metricsPath)
+	if err != nil {
+		logger.Error("Failed to load metrics", "error", err)
+		os.Exit(1)
+	}
+
+	// Print metrics summary
+	fmt.Println("\n=== AI Intern Agent Metrics ===")
+	fmt.Printf("\nRun Metadata:\n")
+	fmt.Printf("  Timestamp:       %s\n", output.RunMetadata.Timestamp)
+	fmt.Printf("  Duration:        %.1f seconds\n", output.RunMetadata.DurationSeconds)
+	fmt.Printf("  Version:         %s\n", output.RunMetadata.AgentVersion)
+
+	fmt.Printf("\nSummary:\n")
+	fmt.Printf("  Tickets Processed: %d\n", output.Summary.TicketsProcessed)
+	fmt.Printf("  PRs Created:       %d\n", output.Summary.PRsCreated)
+	fmt.Printf("  Tickets Failed:    %d\n", output.Summary.TicketsFailed)
+
+	fmt.Printf("\nCost Metrics:\n")
+	fmt.Printf("  Total Cost:        $%.2f\n", output.Summary.TotalCost)
+	fmt.Printf("  Avg Cost/Ticket:   $%.3f\n", output.Summary.AvgCostPerTicket)
+	fmt.Printf("  Input Tokens:      %d\n", output.Summary.TotalInputTokens)
+	fmt.Printf("  Output Tokens:     %d\n", output.Summary.TotalOutputTokens)
+
+	fmt.Printf("\nContext Strategy:\n")
+	fmt.Printf("  Smart Context:     %d\n", output.Summary.SmartContextUsed)
+	fmt.Printf("  Simple Context:    %d\n", output.Summary.SimpleContextUsed)
+
+	fmt.Printf("\nPerformance:\n")
+	fmt.Printf("  Avg Time/Ticket:   %.1f seconds\n", output.Summary.AvgTimePerTicket)
+	fmt.Printf("  Files Changed:     %d\n", output.Summary.TotalFilesChanged)
+
+	fmt.Println("\n=== End Metrics ===\n")
 }
