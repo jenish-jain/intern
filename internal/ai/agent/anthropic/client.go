@@ -33,12 +33,13 @@ type Client struct {
 }
 
 // NewClient creates a new Anthropic API client with default settings.
-// The client is configured with a 60-second timeout and the latest Claude model.
+// The client is configured with a 180-second timeout (3 minutes) to handle large contexts
+// from smart context selection, and uses the latest Claude model.
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
 		Model:  model,
-		HTTP:   &http.Client{Timeout: 60 * time.Second},
+		HTTP:   &http.Client{Timeout: 180 * time.Second},
 	}
 }
 

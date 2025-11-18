@@ -122,7 +122,7 @@ func LoadConfig() (*Config, error) {
 		cfg.OllamaBaseURL = "http://localhost:11434"
 	}
 	if cfg.ContextMaxFiles <= 0 {
-		cfg.ContextMaxFiles = 40
+		cfg.ContextMaxFiles = 20 // Reduced from 40 to prevent timeouts with large contexts
 	}
 	if cfg.ContextMaxBytes <= 0 {
 		cfg.ContextMaxBytes = 32 * 1024

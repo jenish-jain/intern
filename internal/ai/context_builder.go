@@ -10,6 +10,8 @@ import (
 
 	"intern/internal/indexer"
 	"intern/internal/util"
+
+	logger "github.com/jenish-jain/logger"
 )
 
 // BuildRepoContext reads a subset of files (small text/code files) to provide
@@ -127,8 +129,26 @@ func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles
 	// Score files based on keywords
 	scores := indexer.ScoreFiles(fileIndex, keywords)
 
-	// Select top files
-	topScores := indexer.SelectTopFiles(scores, maxFiles)
+	// Filter out low-relevance files (score < 18.0) to reduce context size
+	// This helps prevent timeouts while keeping highly relevant files
+	const minRelevanceThreshold = 18.0
+	filteredScores := make([]indexer.FileScore, 0, len(scores))
+	for _, score := range scores {
+		if score.Score >= minRelevanceThreshold {
+			filteredScores = append(filteredScores, score)
+		}
+	}
+
+	// Log filtering results for debugging
+	if len(scores) > len(filteredScores) {
+		logger.Info("Filtered low-relevance files",
+			"total", len(scores),
+			"filtered", len(filteredScores),
+			"removed", len(scores)-len(filteredScores))
+	}
+
+	// Select top files from filtered results
+	topScores := indexer.SelectTopFiles(filteredScores, maxFiles)
 
 	// Build ticket-specific context from top files
 	var sb strings.Builder
