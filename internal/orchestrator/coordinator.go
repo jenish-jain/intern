@@ -290,6 +290,34 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		logger.Error("Quality gates failed; skipping push/PR", "key", key)
 		return nil
 	}
+	// Check for dry-run mode
+	if c.Cfg.DryRun {
+		logger.Warn("DRY RUN MODE: Skipping push and PR creation",
+			"ticket", key,
+			"branch", branchName,
+			"files_changed", len(valid),
+			"cost", usageMetrics.EstimatedCost)
+
+		// In dry-run, log what would have been done
+		logger.Info("DRY RUN: Would have created PR",
+			"ticket", key,
+			"branch", branchName,
+			"base_branch", c.Cfg.BaseBranch,
+			"files", len(valid),
+			"summary", summary)
+
+		// Mark Done even in dry-run (to avoid reprocessing)
+		if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
+			logger.Error("Failed to move ticket to Done", "error", err)
+		}
+
+		// Update state to avoid reprocessing
+		c.State.MarkProcessed(key)
+		c.State.save()
+
+		return nil // Exit early without creating PR
+	}
+
 	if err := c.Repository.Push(ctx, branchName); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}

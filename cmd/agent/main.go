@@ -132,6 +132,9 @@ CONTEXT_CACHE_TTL=1h         # Cache time-to-live (e.g., "1h", "30m")
 
 PLAN_MAX_FILES=10
 ALLOWED_WRITE_DIRS="internal,cmd,pkg,docs,config,."
+
+# Operational Mode
+DRY_RUN=false  # If true, process tickets but don't create PRs (preview mode)
 `), 0644)
 
 	os.WriteFile("agent_state.jsonc", []byte(`{"processed":{}}`), 0644)

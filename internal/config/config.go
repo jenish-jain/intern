@@ -44,6 +44,8 @@ type Config struct {
 
 	RunTestsBeforePR bool
 	RunVetBeforePR   bool
+
+	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 }
 
 func LoadConfig() (*Config, error) {
@@ -88,6 +90,8 @@ func LoadConfig() (*Config, error) {
 
 		RunTestsBeforePR: viper.GetBool("RUN_TESTS_BEFORE_PR"),
 		RunVetBeforePR:   viper.GetBool("RUN_VET_BEFORE_PR"),
+
+		DryRun: viper.GetBool("DRY_RUN"),
 	}
 
 	// Defaults
