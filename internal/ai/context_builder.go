@@ -105,32 +105,23 @@ func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles
 
 	// Check if index exists
 	if !idx.IndexExists() {
-		// No index available, fall back to simple context builder
-		if baseContext != "" {
-			return baseContext + "\n\n" + BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
-		}
-		return BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
+		// No index available, return error to signal fallback needed
+		return "", fmt.Errorf("file index not found, smart context unavailable")
 	}
 
 	// Load index
 	fileIndex, err := idx.LoadIndex()
 	if err != nil {
-		// Failed to load index, fall back
-		if baseContext != "" {
-			return baseContext + "\n\n" + BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
-		}
-		return BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
+		// Failed to load index, return error
+		return "", fmt.Errorf("failed to load index: %w", err)
 	}
 
 	// Extract keywords from ticket description
 	keywords := indexer.ExtractKeywords(ticketDescription)
 
-	// If no keywords, fall back to simple selection
+	// If no keywords, return error to signal fallback needed
 	if len(keywords) == 0 {
-		if baseContext != "" {
-			return baseContext + "\n\n" + BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
-		}
-		return BuildRepoContext(repoRoot, maxFiles, maxBytesPerFile), nil
+		return "", fmt.Errorf("no keywords extracted from ticket description, smart context unavailable")
 	}
 
 	// Score files based on keywords

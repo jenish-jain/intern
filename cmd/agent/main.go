@@ -295,7 +295,7 @@ func showStatus() {
 		}
 	}
 
-	fmt.Println("\n=== End Status ===\n")
+	fmt.Println("\n=== End Status ===")
 }
 
 func showMetrics() {
@@ -358,5 +358,5 @@ func showMetrics() {
 	fmt.Printf("  Avg Time/Ticket:   %.1f seconds\n", output.Summary.AvgTimePerTicket)
 	fmt.Printf("  Files Changed:     %d\n", output.Summary.TotalFilesChanged)
 
-	fmt.Println("\n=== End Metrics ===\n")
+	fmt.Println("\n=== End Metrics ===")
 }

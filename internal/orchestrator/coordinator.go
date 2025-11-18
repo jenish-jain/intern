@@ -11,6 +11,7 @@ import (
 	"intern/internal/ai"
 	"intern/internal/ai/agent"
 	"intern/internal/config"
+	"intern/internal/indexer"
 	"intern/internal/repository"
 	"intern/internal/ticketing"
 
@@ -187,6 +188,23 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 
+	// Build or update index for smart context selection
+	idx := indexer.New(repoRoot)
+	fileIndex, wasUpdated, indexErr := idx.RebuildIfStale()
+	if indexErr != nil {
+		logger.Warn("Failed to build/update index, smart context may fall back to simple", "error", indexErr)
+	} else {
+		if wasUpdated {
+			logger.Info("Index built/updated successfully", "files", len(fileIndex.Files))
+			// Save the updated index
+			if saveErr := idx.SaveIndex(fileIndex); saveErr != nil {
+				logger.Warn("Failed to save index", "error", saveErr)
+			}
+		} else {
+			logger.Debug("Index already up to date")
+		}
+	}
+
 	// Use smart context builder with ticket description for better file selection
 	usedSmartContext := false
 	ctxStr, ctxErr := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles)
@@ -197,6 +215,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		c.Metrics.IncSimpleContextUsed()
 	} else {
 		usedSmartContext = true
+		logger.Info("Smart context selection succeeded", "context_size", len(ctxStr))
 		c.Metrics.IncSmartContextUsed()
 	}
 

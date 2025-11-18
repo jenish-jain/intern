@@ -203,10 +203,14 @@ func (m *ContextCacheManager) BuildBaseContext(repoPath string, maxBytes int) (*
 		ContextBytes:  totalBytes,
 	}
 
+	commitHash := cache.GitCommitHash
+	if len(commitHash) > 8 {
+		commitHash = commitHash[:8]
+	}
 	logger.Info("Built base context cache",
 		"files", len(filesIncluded),
 		"bytes", totalBytes,
-		"commit", cache.GitCommitHash[:8])
+		"commit", commitHash)
 
 	return cache, nil
 }
