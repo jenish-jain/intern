@@ -127,6 +127,8 @@ BRANCH_PREFIX="feature/"
 
 CONTEXT_MAX_FILES=40
 CONTEXT_MAX_BYTES=32
+CONTEXT_CACHE_ENABLED=true  # Enable context caching for better performance
+CONTEXT_CACHE_TTL=1h         # Cache time-to-live (e.g., "1h", "30m")
 
 PLAN_MAX_FILES=10
 ALLOWED_WRITE_DIRS="internal,cmd,pkg,docs,config,."

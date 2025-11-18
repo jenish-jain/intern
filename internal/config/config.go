@@ -34,11 +34,13 @@ type Config struct {
 	BaseBranch   string
 	BranchPrefix string
 
-	ContextMaxFiles int
-	ContextMaxBytes int
+	ContextMaxFiles      int
+	ContextMaxBytes      int
+	ContextCacheEnabled  bool   // Enable context caching
+	ContextCacheTTL      string // Cache time-to-live (e.g., "1h", "30m")
 
 	PlanMaxFiles     int
-	AllowedWriteDirs []string // TODO: add to config
+	AllowedWriteDirs []string
 
 	RunTestsBeforePR bool
 	RunVetBeforePR   bool
@@ -77,8 +79,10 @@ func LoadConfig() (*Config, error) {
 		BaseBranch:   viper.GetString("BASE_BRANCH"),
 		BranchPrefix: viper.GetString("BRANCH_PREFIX"),
 
-		ContextMaxFiles: viper.GetInt("CONTEXT_MAX_FILES"),
-		ContextMaxBytes: viper.GetInt("CONTEXT_MAX_BYTES"),
+		ContextMaxFiles:     viper.GetInt("CONTEXT_MAX_FILES"),
+		ContextMaxBytes:     viper.GetInt("CONTEXT_MAX_BYTES"),
+		ContextCacheEnabled: viper.GetBool("CONTEXT_CACHE_ENABLED"),
+		ContextCacheTTL:     viper.GetString("CONTEXT_CACHE_TTL"),
 
 		PlanMaxFiles: viper.GetInt("PLAN_MAX_FILES"),
 
@@ -99,6 +103,10 @@ func LoadConfig() (*Config, error) {
 	if cfg.ContextMaxBytes <= 0 {
 		cfg.ContextMaxBytes = 32 * 1024
 	}
+	if cfg.ContextCacheTTL == "" {
+		cfg.ContextCacheTTL = "1h" // Default: cache for 1 hour
+	}
+	// ContextCacheEnabled defaults to false (opt-in)
 	if cfg.PlanMaxFiles <= 0 {
 		cfg.PlanMaxFiles = 20
 	}
