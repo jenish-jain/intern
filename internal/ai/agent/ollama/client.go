@@ -128,6 +128,94 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	return changes, metrics, nil
 }
 
+// FixErrors generates fixes for errors in previously generated code.
+// This is used by the self-healing system to iteratively improve code that fails quality gates.
+func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+	prompt := agent.BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput, previousChanges, agent.PlanPromptOptions{AllowBase64: true})
+	logger.Debug("fix errors prompt in ollama", "prompt_length", len(prompt))
+
+	reqBody := GenerateRequest{
+		Model:  c.Model,
+		Prompt: prompt,
+		Stream: false,
+		Format: "json",
+		Options: map[string]interface{}{
+			"temperature": 0.2,
+			"top_p":       0.9,
+			"num_predict": 16000,
+		},
+	}
+
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/generate", c.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ollama request failed: %w (ensure Ollama is running at %s)", err, c.BaseURL)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("ollama error %d: failed to read response body: %w", resp.StatusCode, readErr)
+		}
+
+		var errResp ErrorResponse
+		if json.Unmarshal(b, &errResp) == nil && errResp.Error != "" {
+			return nil, nil, fmt.Errorf("ollama error %d: %s", resp.StatusCode, errResp.Error)
+		}
+
+		return nil, nil, fmt.Errorf("ollama error %d: %s", resp.StatusCode, string(b))
+	}
+
+	var genResp GenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&genResp); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode ollama response: %w", err)
+	}
+
+	if genResp.Response == "" {
+		return nil, nil, fmt.Errorf("empty response from ollama")
+	}
+
+	raw := agent.SanitizeResponse(genResp.Response)
+	logger.Debug("AI fix response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
+
+	var changes []agent.CodeChange
+	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
+		logger.Error("Failed to parse AI fix response",
+			"error", err,
+			"response_length", len(raw),
+			"response_preview", raw[:util.Min(1000, len(raw))],
+			"model", c.Model)
+		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+	}
+
+	// Decode base64 content if provided
+	for i := range changes {
+		if changes[i].Content == "" && changes[i].ContentB64 != "" {
+			data, derr := base64.StdEncoding.DecodeString(changes[i].ContentB64)
+			if derr == nil {
+				changes[i].Content = string(data)
+			}
+		}
+	}
+
+	// Build usage metrics - using error output length as context size
+	metrics := c.buildUsageMetrics(&genResp, len(errorOutput))
+
+	return changes, metrics, nil
+}
+
 // buildUsageMetrics converts Ollama-specific usage data to provider-agnostic metrics.
 // Since Ollama is local, cost is always zero, but we still track token usage for monitoring.
 func (c *Client) buildUsageMetrics(resp *GenerateResponse, contextBytes int) *agent.UsageMetrics {

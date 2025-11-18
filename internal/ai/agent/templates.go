@@ -31,3 +31,40 @@ func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoCon
 		strings.Join(rules, "\n- "),
 	)
 }
+
+// BuildFixErrorsPrompt builds a prompt for fixing errors in previously generated code.
+// This is used by the self-healing system to iteratively improve code that fails quality gates.
+func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange, opts PlanPromptOptions) string {
+	var rules []string
+	rules = append(rules, "Output ONLY compact JSON. No markdown, no backticks, no commentary.")
+	rules = append(rules, "Schema: [{\"path\":\"relative/path.ext\",\"operation\":\"create|update\",\"content\":\"full file content\"}]")
+	if opts.AllowBase64 {
+		rules = append(rules, "You MAY use {\"content_b64\":\"<base64>\"} instead of content for large or complex content.")
+	}
+	rules = append(rules, "Fix ONLY the errors shown below. Do not make unrelated changes.")
+	rules = append(rules, "Provide complete file content for each file that needs fixing.")
+	rules = append(rules, "Use POSIX-style relative paths under repo root.")
+
+	// Build summary of previous changes
+	var changesSummary strings.Builder
+	changesSummary.WriteString("Previous changes you made:\n")
+	for _, change := range previousChanges {
+		changesSummary.WriteString(fmt.Sprintf("- %s (%s)\n", change.Path, change.Operation))
+	}
+
+	return fmt.Sprintf(
+		"You are a senior Go engineer fixing errors in code you previously generated.\n\n"+
+			"Original ticket: %s - %s\n\n"+
+			"%s\n"+
+			"Error type: %s\n"+
+			"Error output:\n```\n%s\n```\n\n"+
+			"Your task: Fix the errors above. Analyze the error messages carefully and provide corrected code.\n\n"+
+			"Rules:\n- %s\n\nJSON:",
+		strings.TrimSpace(ticketKey),
+		strings.TrimSpace(ticketSummary),
+		changesSummary.String(),
+		errorType,
+		strings.TrimSpace(errorOutput),
+		strings.Join(rules, "\n- "),
+	)
+}
