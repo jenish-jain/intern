@@ -103,13 +103,20 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		// Log the full response on error for debugging
-		logger.Error("Failed to parse AI response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"model", c.Model)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try parsing as a single object (common Ollama issue - model returns object instead of array)
+		var singleChange agent.CodeChange
+		if singleErr := json.Unmarshal([]byte(raw), &singleChange); singleErr == nil {
+			logger.Warn("Model returned single object instead of array - wrapping in array", "model", c.Model)
+			changes = []agent.CodeChange{singleChange}
+		} else {
+			// Both array and object parsing failed - this is a real error
+			logger.Error("Failed to parse AI response",
+				"error", err,
+				"response_length", len(raw),
+				"response_preview", raw[:util.Min(1000, len(raw))],
+				"model", c.Model)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 
 	// Decode base64 content if provided
@@ -192,12 +199,20 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		logger.Error("Failed to parse AI fix response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"model", c.Model)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try parsing as a single object (common Ollama issue - model returns object instead of array)
+		var singleChange agent.CodeChange
+		if singleErr := json.Unmarshal([]byte(raw), &singleChange); singleErr == nil {
+			logger.Warn("Model returned single object instead of array - wrapping in array", "model", c.Model)
+			changes = []agent.CodeChange{singleChange}
+		} else {
+			// Both array and object parsing failed - this is a real error
+			logger.Error("Failed to parse AI fix response",
+				"error", err,
+				"response_length", len(raw),
+				"response_preview", raw[:util.Min(1000, len(raw))],
+				"model", c.Model)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 
 	// Decode base64 content if provided
