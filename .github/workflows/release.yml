@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    branches: [ "master" ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch all history for proper version calculation
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23'
+
+    - name: Determine next version
+      id: semver
+      uses: paulhatch/semantic-version@v5.4.0
+      with:
+        tag_prefix: "v"
+        major_pattern: "(BREAKING CHANGE:)"
+        minor_pattern: "(feat)"
+        version_format: "${major}.${minor}.${patch}"
+        search_commit_body: true
+        bump_each_commit: false
+
+    - name: Check if version changed
+      id: version_check
+      run: |
+        if [ "${{ steps.semver.outputs.version }}" != "${{ steps.semver.outputs.current_version }}" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Build binary
+      if: steps.version_check.outputs.changed == 'true'
+      run: |
+        make build
+        cd build
+        tar -czf agent-linux-amd64.tar.gz agent
+
+    - name: Create Release
+      if: steps.version_check.outputs.changed == 'true'
+      uses: ncipollo/create-release@v1
+      with:
+        tag: v${{ steps.semver.outputs.version }}
+        name: Release v${{ steps.semver.outputs.version }}
+        body: |
+          ## Changes in v${{ steps.semver.outputs.version }}
+
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/v${{ steps.semver.outputs.previous_version }}...v${{ steps.semver.outputs.version }}
+
+          ### Installation
+
+          Download the binary for your platform and extract:
+          ```bash
+          tar -xzf agent-linux-amd64.tar.gz
+          ./agent --help
+          ```
+        artifacts: "build/agent-linux-amd64.tar.gz"
+        draft: false
+        prerelease: false
+        generateReleaseNotes: true
