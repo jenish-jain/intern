@@ -10,6 +10,8 @@ import (
 
 	"intern/internal/indexer"
 	"intern/internal/util"
+
+	logger "github.com/jenish-jain/logger"
 )
 
 // BuildRepoContext reads a subset of files (small text/code files) to provide
@@ -75,40 +77,91 @@ func hasAnySuffix(s string, suff ...string) bool {
 // BuildSmartRepoContext builds repository context using intelligent file selection
 // based on keywords extracted from ticket description.
 // Falls back to BuildRepoContext if index is not available or keywords are empty.
+// Uses context caching to avoid rebuilding common files repeatedly.
 func BuildSmartRepoContext(repoRoot, ticketDescription string, maxFiles int) (string, error) {
-	// Try to use smart selection with index
+	return BuildSmartRepoContextWithCache(repoRoot, ticketDescription, maxFiles, DefaultCacheConfig())
+}
+
+// BuildSmartRepoContextWithCache builds repository context with caching support.
+// It combines a cached base context (core files) with ticket-specific context (relevant files).
+func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles int, cacheConfig CacheConfig) (string, error) {
+	var baseContext string
+	maxBytesPerFile := 32 * 1024
+
+	// Try to get cached base context if caching is enabled
+	if cacheConfig.Enabled {
+		cacheMgr := NewContextCacheManager(cacheConfig)
+		cache, err := cacheMgr.GetOrBuildBaseContext(repoRoot, maxFiles*maxBytesPerFile)
+		if err == nil && cache != nil {
+			baseContext = cache.BaseContext
+			// Reduce maxFiles for ticket-specific context since we already have base context
+			maxFiles = maxFiles - len(cache.FilesIncluded)
+			if maxFiles < 5 {
+				maxFiles = 5 // Ensure at least 5 ticket-specific files
+			}
+		}
+	}
+
+	// Try to use smart selection with index for ticket-specific files
 	idx := indexer.New(repoRoot)
 
 	// Check if index exists
 	if !idx.IndexExists() {
-		// No index available, fall back to simple context builder
-		return BuildRepoContext(repoRoot, maxFiles, 32*1024), nil
+		// No index available, return error to signal fallback needed
+		return "", fmt.Errorf("file index not found, smart context unavailable")
 	}
 
 	// Load index
 	fileIndex, err := idx.LoadIndex()
 	if err != nil {
-		// Failed to load index, fall back
-		return BuildRepoContext(repoRoot, maxFiles, 32*1024), nil
+		// Failed to load index, return error
+		return "", fmt.Errorf("failed to load index: %w", err)
 	}
 
 	// Extract keywords from ticket description
 	keywords := indexer.ExtractKeywords(ticketDescription)
 
-	// If no keywords, fall back to simple selection
+	// If no keywords, return error to signal fallback needed
 	if len(keywords) == 0 {
-		return BuildRepoContext(repoRoot, maxFiles, 32*1024), nil
+		return "", fmt.Errorf("no keywords extracted from ticket description, smart context unavailable")
 	}
 
 	// Score files based on keywords
 	scores := indexer.ScoreFiles(fileIndex, keywords)
 
-	// Select top files
-	topScores := indexer.SelectTopFiles(scores, maxFiles)
+	// Filter out low-relevance files (score < 18.0) to reduce context size
+	// This helps prevent timeouts while keeping highly relevant files
+	const minRelevanceThreshold = 18.0
+	filteredScores := make([]indexer.FileScore, 0, len(scores))
+	for _, score := range scores {
+		if score.Score >= minRelevanceThreshold {
+			filteredScores = append(filteredScores, score)
+		}
+	}
 
-	// Build context from top files
+	// Log filtering results for debugging
+	if len(scores) > len(filteredScores) {
+		logger.Info("Filtered low-relevance files",
+			"total", len(scores),
+			"filtered", len(filteredScores),
+			"removed", len(scores)-len(filteredScores))
+	}
+
+	// Select top files from filtered results
+	topScores := indexer.SelectTopFiles(filteredScores, maxFiles)
+
+	// Build ticket-specific context from top files
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Repository Context (Smart Selection)\n"))
+
+	// Add base context first if available
+	if baseContext != "" {
+		sb.WriteString("# Base Repository Context (Cached)\n")
+		sb.WriteString(baseContext)
+		sb.WriteString("\n\n")
+	}
+
+	// Add ticket-specific context
+	sb.WriteString(fmt.Sprintf("# Ticket-Specific Context (Smart Selection)\n"))
 	sb.WriteString(fmt.Sprintf("# Based on keywords: %v\n", keywords[:util.Min(5, len(keywords))]))
 	sb.WriteString(fmt.Sprintf("# Selected %d most relevant files\n\n", len(topScores)))
 

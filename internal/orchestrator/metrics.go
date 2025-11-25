@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 )
@@ -15,14 +16,19 @@ type Metrics struct {
 	aiPlanFailures   int64
 	ticketsFailed    int64
 
-	// Cost tracking (using cents to avoid float64 atomics)
-	totalInputTokens  int64
-	totalOutputTokens int64
-	totalCostCents    int64 // Cost in cents (multiply by 0.01 for dollars)
+	// Cost tracking (using micro-dollars to avoid float64 atomics)
+	totalInputTokens     int64
+	totalOutputTokens    int64
+	totalCostMicroDollar int64 // Cost in micro-dollars (multiply by 0.000001 for dollars)
 
 	// Context strategy tracking
 	smartContextUsed  int64
 	simpleContextUsed int64
+
+	// Self-healing metrics
+	healAttempts  int64 // Total healing attempts across all tickets
+	healSuccesses int64 // Tickets successfully healed
+	healFailures  int64 // Tickets that failed healing
 
 	// Performance tracking (using milliseconds for atomic operations)
 	totalExecutionTimeMs int64
@@ -54,13 +60,23 @@ func (m *Metrics) IncAIPlanFailures() { atomic.AddInt64(&m.aiPlanFailures, 1) }
 func (m *Metrics) AddTokenUsage(inputTokens, outputTokens int, cost float64) {
 	atomic.AddInt64(&m.totalInputTokens, int64(inputTokens))
 	atomic.AddInt64(&m.totalOutputTokens, int64(outputTokens))
-	// Store cost in cents to use int64 atomic operations
-	atomic.AddInt64(&m.totalCostCents, int64(cost*100))
+	// Store cost in micro-dollars to use int64 atomic operations with sufficient precision
+	// Use math.Round to avoid truncation errors
+	atomic.AddInt64(&m.totalCostMicroDollar, int64(math.Round(cost*1000000)))
 }
 
 // Context strategy tracking
 func (m *Metrics) IncSmartContextUsed()  { atomic.AddInt64(&m.smartContextUsed, 1) }
 func (m *Metrics) IncSimpleContextUsed() { atomic.AddInt64(&m.simpleContextUsed, 1) }
+
+// Self-healing tracking
+func (m *Metrics) AddHealAttempts(n int) {
+	if n > 0 {
+		atomic.AddInt64(&m.healAttempts, int64(n))
+	}
+}
+func (m *Metrics) IncHealSuccesses() { atomic.AddInt64(&m.healSuccesses, 1) }
+func (m *Metrics) IncHealFailures()  { atomic.AddInt64(&m.healFailures, 1) }
 
 // Performance tracking
 func (m *Metrics) AddExecutionTime(d time.Duration) {
@@ -89,6 +105,11 @@ type MetricsSnapshot struct {
 	SmartContextUsed  int64
 	SimpleContextUsed int64
 
+	// Self-healing
+	HealAttempts  int64
+	HealSuccesses int64
+	HealFailures  int64
+
 	// Performance
 	TotalExecutionTime time.Duration
 	AvgExecutionTime   time.Duration
@@ -108,13 +129,13 @@ type MetricsSnapshot struct {
 // Calculates derived values like averages.
 func (m *Metrics) Snapshot() MetricsSnapshot {
 	ticketsProcessed := atomic.LoadInt64(&m.ticketsProcessed)
-	totalCostCents := atomic.LoadInt64(&m.totalCostCents)
+	totalCostMicroDollar := atomic.LoadInt64(&m.totalCostMicroDollar)
 	totalInputTokens := atomic.LoadInt64(&m.totalInputTokens)
 	totalOutputTokens := atomic.LoadInt64(&m.totalOutputTokens)
 	totalExecutionTimeMs := atomic.LoadInt64(&m.totalExecutionTimeMs)
 	totalFilesChanged := atomic.LoadInt64(&m.totalFilesChanged)
 
-	totalCost := float64(totalCostCents) / 100.0
+	totalCost := float64(totalCostMicroDollar) / 1000000.0
 	totalExecutionTime := time.Duration(totalExecutionTimeMs) * time.Millisecond
 
 	// Calculate averages (avoid division by zero)
@@ -139,6 +160,9 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 		TotalCost:         totalCost,
 		SmartContextUsed:  atomic.LoadInt64(&m.smartContextUsed),
 		SimpleContextUsed: atomic.LoadInt64(&m.simpleContextUsed),
+		HealAttempts:      atomic.LoadInt64(&m.healAttempts),
+		HealSuccesses:     atomic.LoadInt64(&m.healSuccesses),
+		HealFailures:      atomic.LoadInt64(&m.healFailures),
 		TotalExecutionTime: totalExecutionTime,
 		AvgExecutionTime:   avgExecTime,
 		TotalFilesChanged:  totalFilesChanged,

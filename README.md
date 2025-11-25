@@ -1,7 +1,7 @@
 # AI Intern Agent 
 [![Go Coverage](https://github.com/jenish-jain/intern/wiki/coverage.svg)](https://raw.githack.com/wiki/jenish-jain/intern/coverage.html)
 
-An autonomous Go-based engineering assistant that reads JIRA tickets assigned to it, analyzes the target repository, generates and applies code changes using an AI provider (Anthropic), opens a GitHub Pull Request, and updates the JIRA ticket status.
+An autonomous Go-based engineering assistant that reads JIRA tickets assigned to it, analyzes the target repository, generates and applies code changes using an AI provider (Anthropic Claude or local LLMs via Ollama), opens a GitHub Pull Request, and updates the JIRA ticket status.
 
 ## Overview
 
@@ -22,8 +22,11 @@ An autonomous Go-based engineering assistant that reads JIRA tickets assigned to
 - `internal/repository/`: Repository service facade
   - `github/`: Concrete GitHub client based on go-git and go-github
 - `internal/ai/`: AI facade and shared types
-  - `anthropic/`: Anthropic provider implementing the AI Agent interface
+  - `agent/`: Agent interface and shared types (CodeChange, UsageMetrics)
+  - `agent/anthropic/`: Anthropic Claude provider
+  - `agent/ollama/`: Ollama local LLM provider
   - `context_builder.go`: Builds a compact repo context for prompting with smart file selection
+- `internal/provider/`: Provider factory for AI agent instantiation
 - `internal/indexer/`: Smart context selection components
   - `indexer.go`: Builds and manages file index for the repository
   - `keywords.go`: Extracts keywords from ticket descriptions (file paths, identifiers)
@@ -87,7 +90,10 @@ The agent uses an intelligent context selection system to optimize token usage w
 ## Requirements
 
 - Go 1.22+ (latest recommended)
-- Access tokens for JIRA and GitHub; Anthropic API key
+- Access tokens for JIRA and GitHub
+- **AI Provider** (choose one):
+  - **Anthropic Claude**: API key from [console.anthropic.com](https://console.anthropic.com)
+  - **Ollama**: Local installation with models (see [Ollama Setup Guide](docs/OLLAMA_SETUP.md))
 
 ## Quick Start
 
@@ -116,18 +122,44 @@ The agent uses an intelligent context selection system to optimize token usage w
 
 Environment variables (examples):
 
-- JIRA:
+- **AI Provider** (required):
+  - `AI_PROVIDER`: `"anthropic"` or `"ollama"` (default: `"anthropic"`)
+
+- **Anthropic** (required if `AI_PROVIDER=anthropic`):
+  - `ANTHROPIC_API_KEY`: API key from [console.anthropic.com](https://console.anthropic.com)
+
+- **Ollama** (required if `AI_PROVIDER=ollama`):
+  - `OLLAMA_BASE_URL`: Ollama server URL (default: `"http://localhost:11434"`)
+  - `OLLAMA_MODEL`: Model name (e.g., `"qwen2.5-coder:7b"`, `"deepseek-coder:6.7b"`)
+  - See [Ollama Setup Guide](docs/OLLAMA_SETUP.md) for installation and model recommendations
+
+- **JIRA**:
   - `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`, `JIRA_PROJECT_KEY`
   - Transitions map (via YAML or env mapping if loaded): you can provide mapping in code/config for status transitions
-- GitHub:
+
+- **GitHub**:
   - `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
-- Anthropic:
-  - `ANTHROPIC_API_KEY`
-- Agent:
+
+- **Agent**:
   - `AGENT_USERNAME`, `POLLING_INTERVAL` (e.g., `30s`), `MAX_CONCURRENT_TICKETS`
   - `WORKING_DIR` (default `./workspace`)
   - `BASE_BRANCH` (default `main`)
   - `BRANCH_PREFIX` (e.g., `feature`)
+
+### Quick Config Examples
+
+**Using Anthropic Claude:**
+```bash
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Using Local Ollama:**
+```bash
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5-coder:7b
+```
 
 ## How It Works
 
@@ -138,10 +170,21 @@ Environment variables (examples):
 
 ## Extensibility
 
-- AI Providers: Implement `ai.Agent` and wire in via DI (see `ai/agent.go`, `ai/anthropic/client.go`)
-- Ticketing Systems: Implement `ticketing.TicketingClient` and create a `TicketingService`
-- VCS Providers: Implement `repository.RepositoryClient` and wrap in `RepositoryService`
-- Pipeline Steps: Add steps to `processTicket` or refactor into discrete handlers
+- **AI Providers**: Implement `agent.Agent` interface and add to factory (see `internal/provider/factory.go`)
+  - Existing: Anthropic Claude (`agent/anthropic/`), Ollama (`agent/ollama/`)
+  - Easy to add: OpenAI, Azure OpenAI, custom APIs
+- **Ticketing Systems**: Implement `ticketing.TicketingClient` and create a `TicketingService`
+- **VCS Providers**: Implement `repository.RepositoryClient` and wrap in `RepositoryService`
+- **Pipeline Steps**: Add steps to `processTicket` or refactor into discrete handlers
+
+### Supported AI Providers
+
+| Provider | Type | Cost | Setup | Best For |
+|----------|------|------|-------|----------|
+| **Anthropic Claude** | Cloud API | $3-15 per M tokens | API key | Production, best quality |
+| **Ollama** | Local LLM | Free | Install + model | Development, privacy, high volume |
+
+See [docs/OLLAMA_SETUP.md](docs/OLLAMA_SETUP.md) for Ollama installation and [docs/MULTI_PROVIDER_PLAN.md](docs/MULTI_PROVIDER_PLAN.md) for architecture details.
 
 ## Testing
 
@@ -161,7 +204,8 @@ See `CONTRIBUTING.md` for detailed guidelines on branching, coding style, commit
 - Base branch auto-detection for checkout (currently applied to PR creation fallback)
 - ✅ ~~Configurable repo context limits (files/bytes)~~ - Implemented with CONTEXT_MAX_FILES and smart selection
 - ✅ ~~Intelligent file selection~~ - Implemented with keyword extraction and file scoring
+- ✅ ~~Multi-provider AI support~~ - Implemented with Anthropic Claude and Ollama
 - Exponential backoff with jitter for all remote calls
 - Per-repo locking for concurrent ticket processing across the same repository
-- Additional AI providers and ticketing/VCS integrations
+- Additional AI providers (OpenAI, Azure OpenAI) and ticketing/VCS integrations
 - Incremental index updates (currently rebuilds entire index each time)

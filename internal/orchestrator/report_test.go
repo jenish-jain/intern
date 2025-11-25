@@ -33,17 +33,23 @@ func TestGenerateReport_BasicReport(t *testing.T) {
 	assert.Contains(t, report, "Context Strategy")
 	assert.Contains(t, report, "Performance")
 
-	// Verify specific values
-	assert.Contains(t, report, "Tickets Processed:       5")
-	assert.Contains(t, report, "PRs Created:            4")
-	assert.Contains(t, report, "Failed:                 1")
+	// Verify specific values (with proper spacing from formatted output)
+	assert.Contains(t, report, "  Tickets Processed:")
+	assert.Contains(t, report, "5")
+	assert.Contains(t, report, "  PRs Created:")
+	assert.Contains(t, report, "4")
+	assert.Contains(t, report, "  Failed:")
+	assert.Contains(t, report, "1")
 	assert.Contains(t, report, "25,000") // Input tokens
 	assert.Contains(t, report, "10,000") // Output tokens
 	assert.Contains(t, report, "$0.225") // Total cost
 	assert.Contains(t, report, "$0.045") // Avg cost
-	assert.Contains(t, report, "Smart Context Used:     4 tickets (80%)")
-	assert.Contains(t, report, "Simple Fallback:        1 tickets (20%)")
-	assert.Contains(t, report, "Total Files Changed:    15")
+	assert.Contains(t, report, "  Smart Context Used:")
+	assert.Contains(t, report, "4 tickets (80%)")
+	assert.Contains(t, report, "  Simple Fallback:")
+	assert.Contains(t, report, "1 tickets (20%)")
+	assert.Contains(t, report, "  Total Files Changed:")
+	assert.Contains(t, report, "15")
 }
 
 func TestGenerateReport_ZeroTickets(t *testing.T) {
@@ -56,7 +62,8 @@ func TestGenerateReport_ZeroTickets(t *testing.T) {
 
 	// Should still generate valid report
 	assert.Contains(t, report, "AI Intern Agent - Run Summary")
-	assert.Contains(t, report, "Tickets Processed:       0")
+	assert.Contains(t, report, "  Tickets Processed:")
+	assert.Contains(t, report, "0")
 	assert.NotContains(t, report, "Avg Cost per Ticket") // No average when zero tickets
 }
 
@@ -71,8 +78,9 @@ func TestGenerateReport_NoFailures(t *testing.T) {
 
 	report := GenerateReport(snapshot)
 
-	assert.Contains(t, report, "Tickets Processed:       3")
-	assert.NotContains(t, report, "Failed:") // Don't show failed if zero
+	assert.Contains(t, report, "  Tickets Processed:")
+	assert.Contains(t, report, "3")
+	assert.NotContains(t, report, "  Failed:") // Don't show failed if zero
 }
 
 func TestGenerateReport_BoxDrawing(t *testing.T) {
@@ -216,8 +224,10 @@ func TestGenerateReport_WithRetries(t *testing.T) {
 	report := GenerateReport(snapshot)
 
 	assert.Contains(t, report, "Reliability")
-	assert.Contains(t, report, "Total Retries:          5")
-	assert.Contains(t, report, "AI Plan Failures:       2")
+	assert.Contains(t, report, "  Total Retries:")
+	assert.Contains(t, report, "5")
+	assert.Contains(t, report, "  AI Plan Failures:")
+	assert.Contains(t, report, "2")
 }
 
 func TestGenerateReport_NoRetries(t *testing.T) {

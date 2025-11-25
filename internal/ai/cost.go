@@ -20,6 +20,18 @@ var (
 		OutputPricePerMillion: 15.00, // $15.00 per million output tokens
 	}
 
+	// OllamaLocal represents local LLM execution (free)
+	// This applies to any model running locally via Ollama:
+	// - qwen2.5-coder (all sizes)
+	// - deepseek-coder (all sizes)
+	// - codellama (all sizes)
+	// - any other local models
+	OllamaLocal = PricingModel{
+		Name:                  "ollama-local",
+		InputPricePerMillion:  0.0, // Free (local execution)
+		OutputPricePerMillion: 0.0, // Free (local execution)
+	}
+
 	// DefaultPricing is used when model-specific pricing is not available
 	DefaultPricing = ClaudeSonnet4
 )

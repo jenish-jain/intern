@@ -8,6 +8,11 @@ type Agent interface {
 	// PlanChanges generates code changes based on a ticket and repository context.
 	// Returns the list of changes, usage metrics for cost tracking, and any error.
 	PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]CodeChange, *UsageMetrics, error)
+
+	// FixErrors generates fixes for errors in previously generated code.
+	// Used by the self-healing system to iteratively improve code that fails quality gates.
+	// Returns the fixed changes, usage metrics, and any error.
+	FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange) ([]CodeChange, *UsageMetrics, error)
 }
 
 // UsageMetrics contains token usage and cost information for an AI operation.

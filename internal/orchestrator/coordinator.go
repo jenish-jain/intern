@@ -11,6 +11,7 @@ import (
 	"intern/internal/ai"
 	"intern/internal/ai/agent"
 	"intern/internal/config"
+	"intern/internal/indexer"
 	"intern/internal/repository"
 	"intern/internal/ticketing"
 
@@ -42,6 +43,16 @@ func (c *Coordinator) Run(ctx context.Context) {
 	}
 	_ = os.MkdirAll(workingDir, 0755)
 	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
+
+	// Start metrics server if enabled
+	if c.Cfg.MetricsEnabled {
+		metricsServer := NewMetricsServer(c.Metrics, c.Cfg.MetricsPort)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil {
+				logger.Error("Metrics server failed", "error", err)
+			}
+		}()
+	}
 
 	// Print final summary and save metrics on shutdown
 	defer func() {
@@ -177,6 +188,23 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 
+	// Build or update index for smart context selection
+	idx := indexer.New(repoRoot)
+	fileIndex, wasUpdated, indexErr := idx.RebuildIfStale()
+	if indexErr != nil {
+		logger.Warn("Failed to build/update index, smart context may fall back to simple", "error", indexErr)
+	} else {
+		if wasUpdated {
+			logger.Info("Index built/updated successfully", "files", len(fileIndex.Files))
+			// Save the updated index
+			if saveErr := idx.SaveIndex(fileIndex); saveErr != nil {
+				logger.Warn("Failed to save index", "error", saveErr)
+			}
+		} else {
+			logger.Debug("Index already up to date")
+		}
+	}
+
 	// Use smart context builder with ticket description for better file selection
 	usedSmartContext := false
 	ctxStr, ctxErr := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles)
@@ -187,6 +215,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		c.Metrics.IncSimpleContextUsed()
 	} else {
 		usedSmartContext = true
+		logger.Info("Smart context selection succeeded", "context_size", len(ctxStr))
 		c.Metrics.IncSmartContextUsed()
 	}
 
@@ -283,13 +312,80 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		logger.Info("No effective changes; skipping push/PR", "key", key)
 		return nil
 	}
-	// quality gates before push/PR
-	// reuse existing repoRoot
-	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
-	if !ok {
-		logger.Error("Quality gates failed; skipping push/PR", "key", key)
+
+	// Run self-healing pipeline (includes quality gates)
+	healResult, err := c.selfHealingPipeline(ctx, key, summary, valid, repoRoot)
+	if err != nil {
+		logger.Error("Self-healing pipeline failed", "key", key, "error", err)
+		return fmt.Errorf("self-healing failed: %w", err)
+	}
+
+	// Track healing metrics
+	if len(healResult.Attempts) > 0 {
+		c.Metrics.AddHealAttempts(len(healResult.Attempts))
+		if healResult.Success {
+			c.Metrics.IncHealSuccesses()
+		} else {
+			c.Metrics.IncHealFailures()
+		}
+	}
+
+	// If healing failed, skip push/PR
+	if !healResult.Success {
+		logger.Error("Quality gates failed after healing attempts; skipping push/PR",
+			"key", key,
+			"attempts", healResult.TotalAttempts,
+			"cost", healResult.TotalCost)
 		return nil
 	}
+
+	// If healing was needed and succeeded, commit the fixes
+	if len(healResult.Attempts) > 0 {
+		if err := c.Repository.Commit(ctx, fmt.Sprintf("fix(%s): self-healing fixes after %d attempts", key, healResult.TotalAttempts)); err != nil {
+			logger.Warn("Failed to commit healing fixes", "error", err)
+			// Continue anyway - fixes are already applied
+		}
+		logger.Info("Self-healing succeeded, fixes committed",
+			"key", key,
+			"attempts", healResult.TotalAttempts,
+			"cost", healResult.TotalCost)
+	}
+
+	// Run final quality gates check for PR notes (should pass now)
+	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
+	if !ok {
+		// This shouldn't happen after successful healing, but check anyway
+		logger.Error("Quality gates failed after successful healing; skipping push/PR", "key", key)
+		return nil
+	}
+	// Check for dry-run mode
+	if c.Cfg.DryRun {
+		logger.Warn("DRY RUN MODE: Skipping push and PR creation",
+			"ticket", key,
+			"branch", branchName,
+			"files_changed", len(valid),
+			"cost", usageMetrics.EstimatedCost)
+
+		// In dry-run, log what would have been done
+		logger.Info("DRY RUN: Would have created PR",
+			"ticket", key,
+			"branch", branchName,
+			"base_branch", c.Cfg.BaseBranch,
+			"files", len(valid),
+			"summary", summary)
+
+		// Mark Done even in dry-run (to avoid reprocessing)
+		if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
+			logger.Error("Failed to move ticket to Done", "error", err)
+		}
+
+		// Update state to avoid reprocessing
+		c.State.MarkProcessed(key)
+		c.State.save()
+
+		return nil // Exit early without creating PR
+	}
+
 	if err := c.Repository.Push(ctx, branchName); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}

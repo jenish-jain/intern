@@ -43,12 +43,16 @@ func New(repoRoot string) *Indexer {
 
 // BuildIndex scans the repository and creates a complete file index
 func (idx *Indexer) BuildIndex() (*FileIndex, error) {
+	// Get current git commit hash
+	gitHash, _ := idx.getGitCommitHash()
+
 	index := &FileIndex{
-		Version:   IndexVersion,
-		IndexedAt: time.Now(),
-		RepoRoot:  idx.repoRoot,
-		Files:     make(map[string]FileMetadata),
-		Modules:   make(map[string][]string),
+		Version:       IndexVersion,
+		IndexedAt:     time.Now(),
+		RepoRoot:      idx.repoRoot,
+		GitCommitHash: gitHash,
+		Files:         make(map[string]FileMetadata),
+		Modules:       make(map[string][]string),
 	}
 
 	err := filepath.WalkDir(idx.repoRoot, func(path string, d fs.DirEntry, err error) error {

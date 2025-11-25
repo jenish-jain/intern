@@ -7,9 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	logger "github.com/jenish-jain/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	// Initialize logger for tests
+	logger.Init("error")
+}
 
 func TestBuildRepoContext(t *testing.T) {
 	// Create a temporary directory structure
@@ -197,14 +203,6 @@ func main() {
 			},
 			notExpectedInContext: []string{},
 		},
-		{
-			name:              "empty description falls back",
-			ticketDescription: "",
-			expectedInContext: []string{
-				// Should fall back to simple builder
-			},
-			notExpectedInContext: []string{},
-		},
 	}
 
 	for _, tt := range tests {
@@ -233,10 +231,11 @@ func TestBuildSmartRepoContext_NoIndex(t *testing.T) {
 	err := os.WriteFile(testFile, []byte("package test"), 0644)
 	require.NoError(t, err)
 
-	// Should fall back to simple builder
+	// Should return error when index is missing
 	context, err := BuildSmartRepoContext(tmpDir, "Fix test bug", 10)
-	require.NoError(t, err)
-	assert.NotEmpty(t, context)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file index not found")
+	assert.Empty(t, context)
 }
 
 func TestBuildSmartRepoContext_FallbackOnError(t *testing.T) {
@@ -251,11 +250,11 @@ func TestBuildSmartRepoContext_FallbackOnError(t *testing.T) {
 	err = os.WriteFile(indexFile, []byte("invalid json"), 0644)
 	require.NoError(t, err)
 
-	// Should fall back gracefully
+	// Should return error for invalid index
 	context, err := BuildSmartRepoContext(tmpDir, "Fix bug", 10)
-	require.NoError(t, err)
-	// Fallback will return empty string if no files
-	assert.NotNil(t, context)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load index")
+	assert.Empty(t, context)
 }
 
 func TestMin(t *testing.T) {

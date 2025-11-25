@@ -33,12 +33,13 @@ type Client struct {
 }
 
 // NewClient creates a new Anthropic API client with default settings.
-// The client is configured with a 60-second timeout and the latest Claude model.
+// The client is configured with a 180-second timeout (3 minutes) to handle large contexts
+// from smart context selection, and uses the latest Claude model.
 func NewClient(apiKey string) *Client {
 	return &Client{
 		APIKey: apiKey,
 		Model:  model,
-		HTTP:   &http.Client{Timeout: 60 * time.Second},
+		HTTP:   &http.Client{Timeout: 180 * time.Second},
 	}
 }
 
@@ -110,6 +111,78 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	// Build usage metrics from API response
 	metrics := c.buildUsageMetrics(&cg.Usage, len(repoContext))
+
+	return changes, metrics, nil
+}
+
+// FixErrors generates fixes for errors in previously generated code.
+// This is used by the self-healing system to iteratively improve code that fails quality gates.
+func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+	prompt := agent.BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput, previousChanges, agent.PlanPromptOptions{AllowBase64: true})
+	logger.Debug("fix errors prompt in anthropic", "prompt", prompt)
+
+	reqBody := codeGenRequest{
+		Model:     c.Model,
+		MaxTokens: 16000,
+		Messages:  []messagePart{{Role: "user", Content: prompt}},
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", c.APIKey)
+	req.Header.Set("anthropic-version", anthropicVersion)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
+		}
+		return nil, nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
+	}
+	var cg codeGenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cg); err != nil {
+		return nil, nil, err
+	}
+	if len(cg.Content) == 0 {
+		return nil, nil, fmt.Errorf("empty anthropic response")
+	}
+	raw := agent.SanitizeResponse(cg.Content[0].Text)
+	logger.Debug("AI fix response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
+
+	var changes []agent.CodeChange
+	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
+		logger.Error("Failed to parse AI fix response",
+			"error", err,
+			"response_length", len(raw),
+			"response_preview", raw[:util.Min(1000, len(raw))],
+			"stop_reason", cg.StopReason)
+		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+	}
+
+	// Decode base64 content if provided
+	for i := range changes {
+		if changes[i].Content == "" && changes[i].ContentB64 != "" {
+			data, derr := base64.StdEncoding.DecodeString(changes[i].ContentB64)
+			if derr == nil {
+				changes[i].Content = string(data)
+			}
+		}
+	}
+
+	// Build usage metrics - using error output length as context size
+	metrics := c.buildUsageMetrics(&cg.Usage, len(errorOutput))
 
 	return changes, metrics, nil
 }
