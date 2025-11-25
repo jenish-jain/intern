@@ -50,9 +50,9 @@ jobs:
 
     - name: Create Release
       if: steps.version_check.outputs.changed == 'true'
-      uses: ncipollo/create-release@v1
+      uses: softprops/action-gh-release@v2
       with:
-        tag: v${{ steps.semver.outputs.version }}
+        tag_name: v${{ steps.semver.outputs.version }}
         name: Release v${{ steps.semver.outputs.version }}
         body: |
           ## Changes in v${{ steps.semver.outputs.version }}
@@ -66,7 +66,7 @@ jobs:
           tar -xzf agent-linux-amd64.tar.gz
           ./agent --help
           ```
-        artifacts: "build/agent-linux-amd64.tar.gz"
+        files: build/agent-linux-amd64.tar.gz
         draft: false
         prerelease: false
-        generateReleaseNotes: true
+        generate_release_notes: true
