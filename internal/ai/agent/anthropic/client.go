@@ -91,13 +91,21 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		// Log the full response on error for debugging
-		logger.Error("Failed to parse AI response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"stop_reason", cg.StopReason)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try to fix truncated JSON (common when model stops mid-generation)
+		fixed := attemptJSONFix(raw)
+		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+			logger.Warn("JSON was truncated, auto-completed successfully",
+				"original_length", len(raw),
+				"fixed_length", len(fixed))
+		} else {
+			// Log the full response on error for debugging
+			logger.Error("Failed to parse AI response",
+				"error", err,
+				"response_length", len(raw),
+				"response_preview", raw[:util.Min(1000, len(raw))],
+				"stop_reason", cg.StopReason)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 	// Decode base64 content if provided
 	for i := range changes {
@@ -163,12 +171,20 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		logger.Error("Failed to parse AI fix response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"stop_reason", cg.StopReason)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try to fix truncated JSON (common when model stops mid-generation)
+		fixed := attemptJSONFix(raw)
+		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+			logger.Warn("JSON was truncated, auto-completed successfully",
+				"original_length", len(raw),
+				"fixed_length", len(fixed))
+		} else {
+			logger.Error("Failed to parse AI fix response",
+				"error", err,
+				"response_length", len(raw),
+				"response_preview", raw[:util.Min(1000, len(raw))],
+				"stop_reason", cg.StopReason)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 
 	// Decode base64 content if provided
@@ -185,6 +201,66 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 	metrics := c.buildUsageMetrics(&cg.Usage, len(errorOutput))
 
 	return changes, metrics, nil
+}
+
+// attemptJSONFix tries to fix common JSON truncation issues.
+// Returns the fixed JSON string, or the original if unable to fix.
+func attemptJSONFix(raw string) string {
+	// Common pattern: JSON array truncated mid-object
+	// Example: [{"path":"foo","content":"bar...  (missing closing "}]
+
+	// Count braces and brackets
+	openBraces := 0
+	closeBraces := 0
+	openBrackets := 0
+	closeBrackets := 0
+	inString := false
+	escaped := false
+
+	for _, char := range raw {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+
+		switch char {
+		case '{':
+			openBraces++
+		case '}':
+			closeBraces++
+		case '[':
+			openBrackets++
+		case ']':
+			closeBrackets++
+		}
+	}
+
+	// If we're still in a string, close it
+	result := raw
+	if inString {
+		result += "\""
+	}
+
+	// Close any unclosed braces and brackets
+	for i := closeBraces; i < openBraces; i++ {
+		result += "}"
+	}
+	for i := closeBrackets; i < openBrackets; i++ {
+		result += "]"
+	}
+
+	return result
 }
 
 // buildUsageMetrics converts Anthropic-specific usage data to provider-agnostic metrics.
