@@ -62,9 +62,18 @@ func runGoBuild(ctx context.Context, repoPath string) (string, error) {
 	return runQualityGate(ctx, repoPath, "go", "build", "./...")
 }
 
-// applyCodeChange writes a code change to disk
+// applyCodeChange writes a code change to disk or deletes a file
 func applyCodeChange(repoPath string, change agent.CodeChange) error {
 	absPath := filepath.Join(repoPath, change.Path)
+
+	if change.Operation == agent.OperationDelete {
+		// Delete the file
+		if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("delete %s: %w", change.Path, err)
+		}
+		logger.Debug("Deleted file during self-healing", "path", change.Path)
+		return nil
+	}
 
 	// Create parent directory if it doesn't exist
 	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {

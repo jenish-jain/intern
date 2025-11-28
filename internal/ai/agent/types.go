@@ -5,6 +5,7 @@ type CodeChangeOperation string
 const (
 	OperationCreate CodeChangeOperation = "create"
 	OperationUpdate CodeChangeOperation = "update"
+	OperationDelete CodeChangeOperation = "delete"
 )
 
 type CodeChange struct {

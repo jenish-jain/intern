@@ -225,7 +225,7 @@ func TestTryHealErrors(t *testing.T) {
 		{
 			name: "successful healing",
 			agentResponse: []agent.CodeChange{
-				{Path: "fixed.go", Content: "package main\n\nfunc fixed() {}\n"},
+				{Path: "fixed.go", Operation: agent.OperationUpdate, Content: "package main\n\nfunc fixed() {}\n"},
 			},
 			agentError: nil,
 			wantErr:    false,
@@ -247,7 +247,10 @@ func TestTryHealErrors(t *testing.T) {
 
 			coord := &Coordinator{
 				Agent: mockAgent,
-				Cfg:   &config.Config{},
+				Cfg: &config.Config{
+					AllowedWriteDirs: []string{"."},
+					PlanMaxFiles:     20,
+				},
 			}
 
 			result, err := coord.tryHealErrors(ctx, "TEST-123", "Test ticket", "test", "test error output", []agent.CodeChange{}, tmpDir)
@@ -334,7 +337,7 @@ func TestSelfHealingPipeline_WithBuildError(t *testing.T) {
 
 	mockAgent := &mockHealingAgent{
 		fixesResponse: []agent.CodeChange{
-			{Path: "main.go", Content: "package main\n\nfunc main() {}\n"},
+			{Path: "main.go", Operation: agent.OperationUpdate, Content: "package main\n\nfunc main() {}\n"},
 		},
 	}
 
@@ -372,7 +375,7 @@ func TestHealResult_Fields(t *testing.T) {
 		ErrorType:   "test",
 		ErrorOutput: "test failed",
 		FixedChanges: []agent.CodeChange{
-			{Path: "test.go", Content: "fixed"},
+			{Path: "test.go", Operation: agent.OperationUpdate, Content: "fixed"},
 		},
 		Metrics: &agent.UsageMetrics{
 			InputTokens:   100,

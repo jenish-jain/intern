@@ -96,6 +96,25 @@ func TestValidatePlannedChanges(t *testing.T) {
 			expected: 0,
 			hasError: true,
 		},
+		{
+			name: "delete operations with empty content accepted",
+			changes: []agent.CodeChange{
+				{Path: "internal/service.go", Content: "", Operation: agent.OperationDelete},
+				{Path: "cmd/main.go", Content: "", Operation: agent.OperationDelete},
+			},
+			expected: 2,
+			hasError: false,
+		},
+		{
+			name: "mixed create and delete operations",
+			changes: []agent.CodeChange{
+				{Path: "internal/new.go", Content: "package internal", Operation: agent.OperationCreate},
+				{Path: "cmd/old.go", Content: "", Operation: agent.OperationDelete},
+				{Path: "pkg/updated.go", Content: "package pkg", Operation: agent.OperationUpdate},
+			},
+			expected: 3,
+			hasError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -113,7 +132,10 @@ func TestValidatePlannedChanges(t *testing.T) {
 				// Verify all returned changes are valid
 				for _, change := range result {
 					assert.NotEmpty(t, change.Path)
-					assert.NotEmpty(t, change.Content)
+					// Content can be empty for delete operations
+					if change.Operation != agent.OperationDelete {
+						assert.NotEmpty(t, change.Content)
+					}
 					assert.False(t, strings.HasPrefix(change.Path, ".."))
 					assert.False(t, filepath.IsAbs(change.Path))
 				}
