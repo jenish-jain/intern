@@ -46,8 +46,8 @@ func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs
 			logger.Debug("Skipping path not in allowed directories", "path", clean, "first_segment", first, "allowed_dirs", allowedDirs)
 			continue
 		}
-		// Ensure content is present (content or content_b64 decoded earlier)
-		if strings.TrimSpace(ch.Content) == "" {
+		// Ensure content is present (except for delete operations)
+		if strings.TrimSpace(ch.Content) == "" && ch.Operation != agent.OperationDelete {
 			logger.Debug("Skipping file with empty content", "path", clean)
 			continue
 		}

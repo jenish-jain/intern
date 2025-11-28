@@ -44,7 +44,10 @@ func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput strin
 	}
 	rules = append(rules, "NEVER modify go.mod or go.sum files - these are managed by Go tooling. If errors mention missing go.sum entries, ignore them - the build system will handle this.")
 	rules = append(rules, "Fix ONLY the errors shown below. Do not make unrelated changes.")
-	rules = append(rules, "Provide complete file content for each file that needs fixing.")
+	rules = append(rules, "Provide SIMPLE, MINIMAL implementations. Prefer standard library over third-party APIs.")
+	rules = append(rules, "For authentication: use ONLY jwt-go for JWT validation. Avoid complex third-party auth libraries.")
+	rules = append(rules, "If you see interface/type errors with third-party libraries, REMOVE the library usage entirely and use simpler alternatives.")
+	rules = append(rules, "Keep implementations under 100 lines when possible to ensure complete JSON output.")
 	rules = append(rules, "Use POSIX-style relative paths under repo root.")
 
 	// Build summary of previous changes
@@ -60,7 +63,8 @@ func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput strin
 			"%s\n"+
 			"Error type: %s\n"+
 			"Error output:\n```\n%s\n```\n\n"+
-			"Your task: Fix the errors above. Analyze the error messages carefully and provide corrected code.\n\n"+
+			"Your task: Fix the errors above using the SIMPLEST possible solution.\n"+
+			"IMPORTANT: Generate complete, valid JSON. If your response is too long, simplify the code further.\n\n"+
 			"Rules:\n- %s\n\nJSON:",
 		strings.TrimSpace(ticketKey),
 		strings.TrimSpace(ticketSummary),

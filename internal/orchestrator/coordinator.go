@@ -289,14 +289,27 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	for _, ch := range valid {
 		abs := filepath.Join(repoRoot, ch.Path)
-		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
-			return fmt.Errorf("mkdir: %w", err)
-		}
-		if err := os.WriteFile(abs, []byte(ch.Content), 0644); err != nil {
-			return fmt.Errorf("write: %w", err)
-		}
-		if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
-			return fmt.Errorf("git add: %w", err)
+		if ch.Operation == agent.OperationDelete {
+			// Delete the file
+			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("delete %s: %w", ch.Path, err)
+			}
+			// Stage the deletion in git
+			if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
+				return fmt.Errorf("git add (delete) %s: %w", ch.Path, err)
+			}
+			logger.Debug("Deleted file", "path", ch.Path)
+		} else {
+			// Create or update the file
+			if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
+				return fmt.Errorf("mkdir: %w", err)
+			}
+			if err := os.WriteFile(abs, []byte(ch.Content), 0644); err != nil {
+				return fmt.Errorf("write: %w", err)
+			}
+			if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
+				return fmt.Errorf("git add %s: %w", ch.Path, err)
+			}
 		}
 	}
 	if len(valid) > 0 {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"intern/internal/ai"
@@ -22,7 +23,7 @@ var _ agent.Agent = (*Client)(nil)
 
 const url = "https://api.anthropic.com/v1/messages"
 const anthropicVersion = "2023-06-01"
-const model = "claude-sonnet-4-20250514"
+const model = "claude-opus-4-5-20251101"
 
 // Client is an implementation of the agent.Agent interface for Anthropic's Claude API.
 // It handles communication with the Anthropic API for code generation tasks.
@@ -91,13 +92,21 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		// Log the full response on error for debugging
-		logger.Error("Failed to parse AI response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"stop_reason", cg.StopReason)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try to fix truncated JSON (common when model stops mid-generation)
+		fixed := attemptJSONFix(raw)
+		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+			logger.Warn("JSON was truncated, auto-completed successfully",
+				"original_length", len(raw),
+				"fixed_length", len(fixed))
+		} else {
+			// Log the full response on error for debugging
+			logger.Error("Failed to parse AI response",
+				"error", err,
+				"response_length", len(raw),
+				"response_preview", raw[:util.Min(1000, len(raw))],
+				"stop_reason", cg.StopReason)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 	// Decode base64 content if provided
 	for i := range changes {
@@ -123,7 +132,7 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 
 	reqBody := codeGenRequest{
 		Model:     c.Model,
-		MaxTokens: 16000,
+		MaxTokens: 8000, // Reduced for fix generation to get more focused, simpler fixes
 		Messages:  []messagePart{{Role: "user", Content: prompt}},
 	}
 	payload, err := json.Marshal(reqBody)
@@ -163,12 +172,25 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		logger.Error("Failed to parse AI fix response",
-			"error", err,
-			"response_length", len(raw),
-			"response_preview", raw[:util.Min(1000, len(raw))],
-			"stop_reason", cg.StopReason)
-		return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		// Try to fix truncated JSON (common when model stops mid-generation)
+		fixed := attemptJSONFix(raw)
+		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+			logger.Warn("JSON was truncated, auto-completed successfully",
+				"original_length", len(raw),
+				"fixed_length", len(fixed))
+		} else {
+			logger.Error("Failed to parse AI fix response",
+				"original_error", err,
+				"fix_error", fixErr,
+				"response_length", len(raw),
+				"fixed_length", len(fixed),
+				"response_preview", raw[:util.Min(500, len(raw))],
+				"fixed_preview", fixed[:util.Min(500, len(fixed))],
+				"response_suffix", raw[util.Max(0, len(raw)-200):],
+				"fixed_suffix", fixed[util.Max(0, len(fixed)-200):],
+				"stop_reason", cg.StopReason)
+			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
+		}
 	}
 
 	// Decode base64 content if provided
@@ -185,6 +207,186 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 	metrics := c.buildUsageMetrics(&cg.Usage, len(errorOutput))
 
 	return changes, metrics, nil
+}
+
+// attemptJSONFix tries to fix common JSON truncation and malformation issues.
+// Returns the fixed JSON string, or the original if unable to fix.
+func attemptJSONFix(raw string) string {
+	// Common pattern: JSON array truncated mid-object
+	// Example: [{"path":"foo","content":"bar...  (missing closing "}]
+
+	// Handle empty or too-short strings
+	if len(raw) < 2 {
+		return raw
+	}
+
+	// Trim any trailing whitespace first
+	trimmed := strings.TrimSpace(raw)
+
+	// Fix common AI generation errors first
+	trimmed = fixCommonMalformations(trimmed)
+
+	// Strategy 1: Try to complete the truncated JSON by counting braces
+	result := attemptSimpleFix(trimmed)
+
+	// Validate the result is at least syntactically balanced
+	if isBalanced(result) {
+		return result
+	}
+
+	// Strategy 2: More aggressive - find last complete object and truncate there
+	return attemptAggressiveFix(trimmed)
+}
+
+// fixCommonMalformations fixes common AI-generated JSON errors
+func fixCommonMalformations(s string) string {
+	// Pattern 1: Extra closing brace before array close: "}}] instead of "}]
+	// This happens when AI generates [{...}}}] instead of [{...}]
+	if strings.HasSuffix(s, "}}]") {
+		s = s[:len(s)-3] + "}]"
+	}
+
+	// Pattern 2: Extra closing brace after array close: "}]] instead of "}]
+	if strings.HasSuffix(s, "}]]") {
+		s = s[:len(s)-3] + "}]"
+	}
+
+	return s
+}
+
+// attemptSimpleFix tries to complete truncated JSON by adding missing closing characters
+func attemptSimpleFix(trimmed string) string {
+	openBraces := 0
+	closeBraces := 0
+	openBrackets := 0
+	closeBrackets := 0
+	inString := false
+	escaped := false
+
+	for _, char := range trimmed {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString {
+			switch char {
+			case '{':
+				openBraces++
+			case '}':
+				closeBraces++
+			case '[':
+				openBrackets++
+			case ']':
+				closeBrackets++
+			}
+		}
+	}
+
+	result := trimmed
+
+	// Close any open string
+	if inString {
+		result += "\""
+	}
+
+	// Close objects before arrays
+	for i := closeBraces; i < openBraces; i++ {
+		result += "}"
+	}
+
+	// Close arrays
+	for i := closeBrackets; i < openBrackets; i++ {
+		result += "]"
+	}
+
+	return result
+}
+
+// attemptAggressiveFix finds the last complete object and truncates everything after
+func attemptAggressiveFix(trimmed string) string {
+	// Find the last '}' that completes an object
+	lastCompleteIdx := -1
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i, char := range trimmed {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString {
+			if char == '{' {
+				depth++
+			} else if char == '}' {
+				depth--
+				if depth == 1 { // We're at array level with one object closed
+					lastCompleteIdx = i
+				}
+			}
+		}
+	}
+
+	// If we found a complete object, truncate there and close the array
+	if lastCompleteIdx > 0 {
+		return trimmed[:lastCompleteIdx+1] + "]"
+	}
+
+	// Fallback: just return the simple fix
+	return attemptSimpleFix(trimmed)
+}
+
+// isBalanced checks if the JSON has balanced braces and brackets
+func isBalanced(s string) bool {
+	braces := 0
+	brackets := 0
+	inString := false
+	escaped := false
+
+	for _, char := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' {
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			inString = !inString
+			continue
+		}
+		if !inString {
+			switch char {
+			case '{':
+				braces++
+			case '}':
+				braces--
+			case '[':
+				brackets++
+			case ']':
+				brackets--
+			}
+		}
+	}
+
+	return braces == 0 && brackets == 0 && !inString
 }
 
 // buildUsageMetrics converts Anthropic-specific usage data to provider-agnostic metrics.
