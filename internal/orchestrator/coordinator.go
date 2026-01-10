@@ -11,6 +11,7 @@ import (
 	"intern/internal/ai"
 	"intern/internal/ai/agent"
 	"intern/internal/config"
+	"intern/internal/errors"
 	"intern/internal/indexer"
 	"intern/internal/repository"
 	"intern/internal/ticketing"
@@ -19,16 +20,17 @@ import (
 )
 
 type Coordinator struct {
-	Ticketing  *ticketing.TicketingService
+	Ticketing  *ticketing.Service
 	Repository *repository.RepositoryService
 	Agent      agent.Agent
 	Cfg        *config.Config
 	State      *State
 	Metrics    *Metrics
+	RepoPaths  *repository.RepositoryPath // Centralized path management
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State) *Coordinator {
-	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics()}
+func NewCoordinator(ticketing *ticketing.Service, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
+	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics(), RepoPaths: repoPaths}
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -37,12 +39,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 		interval = 30 * time.Second
 	}
 
-	workingDir := c.Cfg.WorkingDir
-	if workingDir == "" {
-		workingDir = "./workspace"
-	}
-	_ = os.MkdirAll(workingDir, 0755)
-	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
+	// Ensure working directory exists
+	_ = os.MkdirAll(c.RepoPaths.WorkingDir(), 0755)
 
 	// Start metrics server if enabled
 	if c.Cfg.MetricsEnabled {
@@ -71,7 +69,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 		fmt.Println("\n" + report)
 
 		// Save metrics to JSON
-		repoRoot := filepath.Join(workingDir, c.Cfg.GitHubRepo)
+		repoRoot := c.RepoPaths.Root()
 		// Note: We don't have access to individual ticket metrics here yet
 		// This will be enhanced in a future iteration to collect them
 		metricsFile, err := SaveMetrics(snapshot, []TicketMetrics{}, repoRoot)
@@ -131,12 +129,28 @@ func (c *Coordinator) Run(ctx context.Context) {
 				sem <- struct{}{}
 				wg.Add(1)
 				go func(key, summary, description string) {
+					// Ensure cleanup happens even on panic
 					defer wg.Done()
 					defer func() { <-sem }()
+
+					// Panic recovery - catch and log panics without crashing agent
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Error("Worker panic recovered", "ticket", key, "panic", r)
+							c.Metrics.IncTicketsFailed()
+							// Panic recovered - ticket will not be marked as processed
+							// It will be retried in next polling cycle
+						}
+					}()
+
+					// Process the ticket
 					if err := c.processTicket(ctx, key, summary, description); err != nil {
 						logger.Error("Failed processing ticket", "key", key, "error", err)
+						c.Metrics.IncTicketsFailed()
 						return
 					}
+
+					// Only mark as processed if successful
 					c.State.MarkProcessed(key)
 				}(t.Key, t.Summary, t.Description)
 			}
@@ -157,9 +171,23 @@ func backoffSleep(base time.Duration) {
 	time.Sleep(t)
 }
 
+// checkContext checks if the context has been cancelled and returns an appropriate error.
+// This allows for graceful shutdown at key checkpoints in ticket processing.
+func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
+	select {
+	case <-ctx.Done():
+		logger.Info("Context cancelled, stopping ticket processing",
+			"ticket", ticketKey,
+			"checkpoint", checkpoint)
+		return fmt.Errorf("context cancelled at %s: %w", checkpoint, ctx.Err())
+	default:
+		return nil
+	}
+}
+
 func (c *Coordinator) prepareRepository(ctx context.Context) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
+	repoPath := c.RepoPaths.Root()
+	if _, err := os.Stat(c.RepoPaths.GitDir()); os.IsNotExist(err) {
 		logger.Info("Cloning repository...")
 		if err := c.Repository.CloneRepository(ctx, repoPath); err != nil {
 			return err
@@ -169,9 +197,16 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 	if base == "" {
 		base = "main"
 	}
-	_ = c.Repository.SwitchBranch(ctx, base)
+	if err := c.Repository.SwitchBranch(ctx, base); err != nil {
+		// Switching to base branch is critical - we need to be on the right branch
+		// before creating feature branches
+		return errors.NewRepoBranchError(err, base, "switch to").
+			WithContext("operation", "prepareRepository")
+	}
 	if err := c.Repository.SyncWithRemote(ctx); err != nil {
-		logger.Error("Sync failed", "error", err)
+		// Log but don't fail - sync is best-effort
+		// We can still work with slightly stale code
+		logger.Warn("Sync with remote failed (continuing with local state)", "error", err)
 	}
 	return nil
 }
@@ -182,11 +217,20 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
 	logger.Info("Creating branch", "branch", branchName)
 	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
-		return fmt.Errorf("create branch: %w", err)
+		return errors.NewRepoBranchError(err, branchName, "create").
+			WithContext("ticket_key", key)
 	}
-	_ = c.Repository.SwitchBranch(ctx, branchName)
+	if err := c.Repository.SwitchBranch(ctx, branchName); err != nil {
+		return errors.NewRepoBranchError(err, branchName, "switch to").
+			WithContext("ticket_key", key)
+	}
 
-	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
+	// Checkpoint 1: Check for cancellation before expensive operations
+	if err := checkContext(ctx, key, "after branch setup"); err != nil {
+		return err
+	}
+
+	repoRoot := c.RepoPaths.Root()
 
 	// Build or update index for smart context selection
 	idx := indexer.New(repoRoot)
@@ -234,6 +278,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if planErr != nil {
 		c.Metrics.IncAIPlanFailures()
 		return fmt.Errorf("AI planning failed: %w", planErr)
+	}
+
+	// Checkpoint 2: Check for cancellation after AI planning (expensive operation)
+	if err := checkContext(ctx, key, "after AI planning"); err != nil {
+		return err
 	}
 
 	// Update context strategy in usage metrics
@@ -312,6 +361,12 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			}
 		}
 	}
+
+	// Checkpoint 3: Check for cancellation after file operations (before commit)
+	if err := checkContext(ctx, key, "after file operations"); err != nil {
+		return err
+	}
+
 	if len(valid) > 0 {
 		if err := c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): apply planned changes", key)); err != nil {
 			return fmt.Errorf("commit: %w", err)
@@ -364,6 +419,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			"cost", healResult.TotalCost)
 	}
 
+	// Checkpoint 4: Check for cancellation before push/PR (point of no return)
+	if err := checkContext(ctx, key, "before push/PR"); err != nil {
+		return err
+	}
+
 	// Run final quality gates check for PR notes (should pass now)
 	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
 	if !ok {
@@ -393,8 +453,8 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		}
 
 		// Update state to avoid reprocessing
+		// MarkProcessed automatically saves the state, so no need to call Save() explicitly
 		c.State.MarkProcessed(key)
-		c.State.save()
 
 		return nil // Exit early without creating PR
 	}

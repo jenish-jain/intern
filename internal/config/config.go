@@ -2,7 +2,11 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
+
+	"intern/internal/errors"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -164,38 +168,173 @@ func LoadConfig() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if c.JiraURL == "" || c.JiraEmail == "" || c.JiraAPIToken == "" || c.JiraProject == "" {
-		return fmt.Errorf("missing JIRA configuration")
+	// Validate required JIRA configuration
+	if c.JiraURL == "" {
+		return errors.NewConfigMissingError("JIRA_URL")
 	}
-	if c.GitHubToken == "" || c.GitHubOwner == "" || c.GitHubRepo == "" {
-		return fmt.Errorf("missing GitHub configuration")
+	if c.JiraEmail == "" {
+		return errors.NewConfigMissingError("JIRA_EMAIL")
+	}
+	if c.JiraAPIToken == "" {
+		return errors.NewConfigMissingError("JIRA_API_TOKEN")
+	}
+	if c.JiraProject == "" {
+		return errors.NewConfigMissingError("JIRA_PROJECT_KEY")
+	}
+
+	// Validate required GitHub configuration
+	if c.GitHubToken == "" {
+		return errors.NewConfigMissingError("GITHUB_TOKEN")
+	}
+	if c.GitHubOwner == "" {
+		return errors.NewConfigMissingError("GITHUB_OWNER")
+	}
+	if c.GitHubRepo == "" {
+		return errors.NewConfigMissingError("GITHUB_REPO")
 	}
 
 	// Validate AI provider configuration
 	switch c.AIProvider {
 	case "anthropic":
 		if c.AnthropicAPIKey == "" {
-			return fmt.Errorf("missing Anthropic API key (required when AI_PROVIDER=anthropic)")
+			return errors.NewConfigMissingError("ANTHROPIC_API_KEY")
 		}
 	case "ollama":
 		if c.OllamaModel == "" {
-			return fmt.Errorf("missing Ollama model (required when AI_PROVIDER=ollama)")
+			return errors.NewConfigMissingError("OLLAMA_MODEL")
 		}
 		if c.OllamaBaseURL == "" {
-			return fmt.Errorf("missing Ollama base URL")
+			return errors.NewConfigMissingError("OLLAMA_BASE_URL")
 		}
 	default:
-		return fmt.Errorf("unsupported AI provider: %s (supported: anthropic, ollama)", c.AIProvider)
+		return errors.NewConfigInvalidError("AI_PROVIDER", c.AIProvider,
+			"supported values: anthropic, ollama")
 	}
 
+	// Validate agent configuration
 	if c.AgentUsername == "" {
-		return fmt.Errorf("missing agent username")
+		return errors.NewConfigMissingError("AGENT_USERNAME")
 	}
+
+	// Validate and parse polling interval
 	if c.PollingInterval == "" {
-		return fmt.Errorf("missing polling interval")
+		return errors.NewConfigMissingError("POLLING_INTERVAL")
 	}
+	if _, err := time.ParseDuration(c.PollingInterval); err != nil {
+		return errors.NewConfigInvalidError("POLLING_INTERVAL", c.PollingInterval,
+			fmt.Sprintf("invalid duration format: %v (use: 30s, 5m, 1h, etc.)", err))
+	}
+
+	// Validate concurrent tickets
 	if c.MaxConcurrentTickets <= 0 {
-		return fmt.Errorf("max concurrent tickets must be > 0")
+		return errors.NewConfigInvalidError("MAX_CONCURRENT_TICKETS", c.MaxConcurrentTickets,
+			"must be greater than 0")
 	}
+	if c.MaxConcurrentTickets > 100 {
+		return errors.NewConfigInvalidError("MAX_CONCURRENT_TICKETS", c.MaxConcurrentTickets,
+			"exceeds reasonable limit of 100 (risk of resource exhaustion)")
+	}
+
+	// Validate working directory (if specified)
+	if c.WorkingDir != "" {
+		if !strings.HasPrefix(c.WorkingDir, "/") && !strings.HasPrefix(c.WorkingDir, "./") && !strings.HasPrefix(c.WorkingDir, "../") {
+			// Relative path without ./ prefix - add it for clarity
+			c.WorkingDir = "./" + c.WorkingDir
+		}
+		// Note: We don't check if directory exists yet - it will be created on startup
+		// But we can validate it's not a file
+		if info, err := os.Stat(c.WorkingDir); err == nil && !info.IsDir() {
+			return errors.NewConfigInvalidError("WORKING_DIR", c.WorkingDir,
+				"path exists but is not a directory")
+		}
+	}
+
+	// Validate context cache TTL format
+	if c.ContextCacheTTL != "" {
+		if _, err := time.ParseDuration(c.ContextCacheTTL); err != nil {
+			return errors.NewConfigInvalidError("CONTEXT_CACHE_TTL", c.ContextCacheTTL,
+				fmt.Sprintf("invalid duration format: %v", err))
+		}
+	}
+
+	// Validate file limits
+	if c.ContextMaxFiles <= 0 {
+		return errors.NewConfigInvalidError("CONTEXT_MAX_FILES", c.ContextMaxFiles,
+			"must be greater than 0")
+	}
+	if c.ContextMaxFiles > 1000 {
+		return errors.NewConfigInvalidError("CONTEXT_MAX_FILES", c.ContextMaxFiles,
+			"exceeds reasonable limit of 1000 (risk of token limit/timeout)")
+	}
+
+	if c.PlanMaxFiles <= 0 {
+		return errors.NewConfigInvalidError("PLAN_MAX_FILES", c.PlanMaxFiles,
+			"must be greater than 0")
+	}
+	if c.PlanMaxFiles > 100 {
+		return errors.NewConfigInvalidError("PLAN_MAX_FILES", c.PlanMaxFiles,
+			"exceeds reasonable limit of 100 (risk of large changesets)")
+	}
+
+	if c.ContextMaxBytes <= 0 {
+		return errors.NewConfigInvalidError("CONTEXT_MAX_BYTES", c.ContextMaxBytes,
+			"must be greater than 0")
+	}
+
+	// Validate self-healing configuration for conflicts
+	if c.SelfHealEnabled {
+		// At least one healing gate must be enabled
+		if !c.SelfHealOnTests && !c.SelfHealOnVet && !c.SelfHealOnBuild {
+			return errors.NewConfigConflictError(
+				[]string{"SELF_HEAL_ENABLED", "SELF_HEAL_ON_TESTS", "SELF_HEAL_ON_VET", "SELF_HEAL_ON_BUILD"},
+				"SELF_HEAL_ENABLED=true but no healing gates are enabled (set at least one SELF_HEAL_ON_* to true)")
+		}
+
+		// Validate max attempts
+		if c.SelfHealMaxAttempts <= 0 {
+			return errors.NewConfigInvalidError("SELF_HEAL_MAX_ATTEMPTS", c.SelfHealMaxAttempts,
+				"must be greater than 0 when self-healing is enabled")
+		}
+		if c.SelfHealMaxAttempts > 10 {
+			return errors.NewConfigInvalidError("SELF_HEAL_MAX_ATTEMPTS", c.SelfHealMaxAttempts,
+				"exceeds reasonable limit of 10 (risk of excessive AI costs)")
+		}
+	}
+
+	// Validate quality gates - if self-healing is on a specific gate, the gate itself should be enabled
+	if c.SelfHealOnTests && !c.RunTestsBeforePR {
+		// This is actually okay - self-healing can run tests even if not required before PR
+		// Just log a warning in this case (we'll add logging later)
+	}
+	if c.SelfHealOnVet && !c.RunVetBeforePR {
+		// Same as above - okay to heal vet errors even if not required before PR
+	}
+
+	// Validate metrics configuration
+	if c.MetricsEnabled {
+		if c.MetricsPort < 1024 || c.MetricsPort > 65535 {
+			return errors.NewConfigInvalidError("METRICS_PORT", c.MetricsPort,
+				"must be between 1024 and 65535 (avoid privileged ports)")
+		}
+	}
+
+	// Validate allowed write directories
+	if len(c.AllowedWriteDirs) == 0 {
+		return errors.NewConfigInvalidError("ALLOWED_WRITE_DIRS", "",
+			"must specify at least one allowed directory")
+	}
+
+	// Check for potential security issues
+	for _, dir := range c.AllowedWriteDirs {
+		if dir == "/" {
+			return errors.NewConfigInvalidError("ALLOWED_WRITE_DIRS", dir,
+				"allowing writes to root directory (/) is not permitted for security reasons")
+		}
+		if strings.Contains(dir, "..") {
+			return errors.NewConfigInvalidError("ALLOWED_WRITE_DIRS", dir,
+				"path traversal patterns (..) are not allowed")
+		}
+	}
+
 	return nil
 }
