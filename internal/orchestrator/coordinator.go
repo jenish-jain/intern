@@ -393,8 +393,8 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		}
 
 		// Update state to avoid reprocessing
+		// MarkProcessed automatically saves the state, so no need to call Save() explicitly
 		c.State.MarkProcessed(key)
-		c.State.save()
 
 		return nil // Exit early without creating PR
 	}
