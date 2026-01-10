@@ -131,12 +131,28 @@ func (c *Coordinator) Run(ctx context.Context) {
 				sem <- struct{}{}
 				wg.Add(1)
 				go func(key, summary, description string) {
+					// Ensure cleanup happens even on panic
 					defer wg.Done()
 					defer func() { <-sem }()
+
+					// Panic recovery - catch and log panics without crashing agent
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Error("Worker panic recovered", "ticket", key, "panic", r)
+							c.Metrics.IncTicketsFailed()
+							// Panic recovered - ticket will not be marked as processed
+							// It will be retried in next polling cycle
+						}
+					}()
+
+					// Process the ticket
 					if err := c.processTicket(ctx, key, summary, description); err != nil {
 						logger.Error("Failed processing ticket", "key", key, "error", err)
+						c.Metrics.IncTicketsFailed()
 						return
 					}
+
+					// Only mark as processed if successful
 					c.State.MarkProcessed(key)
 				}(t.Key, t.Summary, t.Description)
 			}
