@@ -24,9 +24,10 @@ type githubClient struct {
 	repo     string
 	token    string // Store the token for git operations
 	repoURL  string // Optional: override repository URL for testing
+	paths    *repository.RepositoryPath // Centralized path management
 }
 
-func NewClient(token, owner, repo string) repository.RepositoryClient {
+func NewClient(token, owner, repo string, paths *repository.RepositoryPath) repository.RepositoryClient {
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	client := gh.NewClient(oauth2.NewClient(context.Background(), ts))
 	return &githubClient{
@@ -34,6 +35,7 @@ func NewClient(token, owner, repo string) repository.RepositoryClient {
 		owner:    owner,
 		repo:     repo,
 		token:    token,
+		paths:    paths,
 	}
 }
 
@@ -72,7 +74,7 @@ func (c *githubClient) CloneRepository(ctx context.Context, destPath string) err
 }
 
 func (c *githubClient) SyncWithRemote(ctx context.Context) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo) // Assuming working dir is set
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -94,7 +96,7 @@ func (c *githubClient) SyncWithRemote(ctx context.Context) error {
 }
 
 func (c *githubClient) ListFiles(ctx context.Context, path string) ([]string, error) {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 
 	var files []string
 	err := filepath.Walk(filepath.Join(repoPath, path), func(p string, info os.FileInfo, err error) error {
@@ -118,7 +120,7 @@ func (c *githubClient) ListFiles(ctx context.Context, path string) ([]string, er
 }
 
 func (c *githubClient) CreateBranch(ctx context.Context, branchName string) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -139,7 +141,7 @@ func (c *githubClient) CreateBranch(ctx context.Context, branchName string) erro
 }
 
 func (c *githubClient) SwitchBranch(ctx context.Context, branchName string) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -160,7 +162,7 @@ func (c *githubClient) SwitchBranch(ctx context.Context, branchName string) erro
 }
 
 func (c *githubClient) AddFile(ctx context.Context, filePath string) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -177,7 +179,7 @@ func (c *githubClient) AddFile(ctx context.Context, filePath string) error {
 }
 
 func (c *githubClient) Commit(ctx context.Context, message string) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -201,7 +203,7 @@ func (c *githubClient) Commit(ctx context.Context, message string) error {
 }
 
 func (c *githubClient) Push(ctx context.Context, branchName string) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return fmt.Errorf("failed to open repository at %s: %w", repoPath, err)
@@ -256,7 +258,7 @@ func (c *githubClient) CreatePullRequest(ctx context.Context, baseBranch, headBr
 }
 
 func (c *githubClient) HasLocalChanges(ctx context.Context) (bool, error) {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.repo)
+	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to open repository at %s: %w", repoPath, err)

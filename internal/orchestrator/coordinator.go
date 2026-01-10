@@ -26,10 +26,11 @@ type Coordinator struct {
 	Cfg        *config.Config
 	State      *State
 	Metrics    *Metrics
+	RepoPaths  *repository.RepositoryPath // Centralized path management
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State) *Coordinator {
-	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics()}
+func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
+	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics(), RepoPaths: repoPaths}
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -38,12 +39,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 		interval = 30 * time.Second
 	}
 
-	workingDir := c.Cfg.WorkingDir
-	if workingDir == "" {
-		workingDir = "./workspace"
-	}
-	_ = os.MkdirAll(workingDir, 0755)
-	_ = os.Setenv("AGENT_WORKING_DIR", workingDir)
+	// Ensure working directory exists
+	_ = os.MkdirAll(c.RepoPaths.WorkingDir(), 0755)
 
 	// Start metrics server if enabled
 	if c.Cfg.MetricsEnabled {
@@ -72,7 +69,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 		fmt.Println("\n" + report)
 
 		// Save metrics to JSON
-		repoRoot := filepath.Join(workingDir, c.Cfg.GitHubRepo)
+		repoRoot := c.RepoPaths.Root()
 		// Note: We don't have access to individual ticket metrics here yet
 		// This will be enhanced in a future iteration to collect them
 		metricsFile, err := SaveMetrics(snapshot, []TicketMetrics{}, repoRoot)
@@ -189,8 +186,8 @@ func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
 }
 
 func (c *Coordinator) prepareRepository(ctx context.Context) error {
-	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
+	repoPath := c.RepoPaths.Root()
+	if _, err := os.Stat(c.RepoPaths.GitDir()); os.IsNotExist(err) {
 		logger.Info("Cloning repository...")
 		if err := c.Repository.CloneRepository(ctx, repoPath); err != nil {
 			return err
@@ -233,7 +230,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		return err
 	}
 
-	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
+	repoRoot := c.RepoPaths.Root()
 
 	// Build or update index for smart context selection
 	idx := indexer.New(repoRoot)

@@ -71,7 +71,18 @@ func main() {
 
 	ticketingSvc := ticketing.NewTicketingService(jiraClient)
 
-	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo)
+	// Create centralized path manager
+	workingDir := cfg.WorkingDir
+	if workingDir == "" {
+		workingDir = "./workspace"
+	}
+	repoPaths, err := repository.NewRepositoryPath(workingDir, cfg.GitHubRepo)
+	if err != nil {
+		logger.Error("Failed to create repository path manager", "error", err)
+		os.Exit(1)
+	}
+
+	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo, repoPaths)
 	repoSvc := repository.NewRepositoryService(githubClient)
 
 	stateFile := "agent_state.jsonc"
@@ -95,7 +106,7 @@ func main() {
 	}
 	logger.Info("Initialized AI provider", "provider", cfg.AIProvider)
 
-	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state)
+	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state, repoPaths)
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -187,17 +198,22 @@ func buildIndex() {
 		os.Exit(1)
 	}
 
-	// Determine repository root
-	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	// Create path manager
+	workingDir := cfg.WorkingDir
 	if workingDir == "" {
-		workingDir = cfg.WorkingDir
+		workingDir = "./workspace"
 	}
-	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
+	repoPaths, err := repository.NewRepositoryPath(workingDir, cfg.GitHubRepo)
+	if err != nil {
+		logger.Error("Failed to create repository path manager", "error", err)
+		os.Exit(1)
+	}
+	repoRoot := repoPaths.Root()
 
 	// Check if repository exists
 	if _, err := os.Stat(repoRoot); os.IsNotExist(err) {
 		logger.Error("Repository not found", "path", repoRoot)
-		logger.Info("Make sure to clone the repository first or set AGENT_WORKING_DIR correctly")
+		logger.Info("Make sure to clone the repository first or set WORKING_DIR correctly in your config")
 		os.Exit(1)
 	}
 
@@ -259,15 +275,18 @@ func showStatus() {
 	}
 
 	// Try to load metrics if available
-	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	workingDir := cfg.WorkingDir
 	if workingDir == "" {
-		workingDir = cfg.WorkingDir
-		if workingDir == "" {
-			workingDir = "./workspace"
-		}
+		workingDir = "./workspace"
 	}
-	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
-	metricsPath := filepath.Join(repoRoot, ".ai-intern", "metrics.json")
+	repoPaths, err := repository.NewRepositoryPath(workingDir, cfg.GitHubRepo)
+	if err != nil {
+		logger.Warn("Failed to create repository path manager", "error", err)
+		fmt.Println("\n=== AI Intern Agent Status ===")
+		fmt.Println("Error: Could not determine repository path")
+		return
+	}
+	metricsPath := filepath.Join(repoPaths.Root(), ".ai-intern", "metrics.json")
 
 	fmt.Println("\n=== AI Intern Agent Status ===")
 	fmt.Printf("\nConfiguration:\n")
@@ -318,15 +337,16 @@ func showMetrics() {
 		os.Exit(1)
 	}
 
-	workingDir := os.Getenv("AGENT_WORKING_DIR")
+	workingDir := cfg.WorkingDir
 	if workingDir == "" {
-		workingDir = cfg.WorkingDir
-		if workingDir == "" {
-			workingDir = "./workspace"
-		}
+		workingDir = "./workspace"
 	}
-	repoRoot := filepath.Join(workingDir, cfg.GitHubRepo)
-	metricsPath := filepath.Join(repoRoot, ".ai-intern", "metrics.json")
+	repoPaths, err := repository.NewRepositoryPath(workingDir, cfg.GitHubRepo)
+	if err != nil {
+		logger.Error("Failed to create repository path manager", "error", err)
+		os.Exit(1)
+	}
+	metricsPath := filepath.Join(repoPaths.Root(), ".ai-intern", "metrics.json")
 
 	// Check if metrics file exists
 	if _, err := os.Stat(metricsPath); os.IsNotExist(err) {
