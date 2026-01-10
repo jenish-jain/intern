@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"intern/internal/config"
+	"intern/internal/errors"
 	"intern/internal/indexer"
 	"intern/internal/orchestrator"
 	"intern/internal/provider"
@@ -75,7 +76,16 @@ func main() {
 
 	stateFile := "agent_state.jsonc"
 	state := orchestrator.NewState(stateFile)
-	_ = state.Load() // ignore error if file doesn't exist
+	// Load existing state if available
+	// Only ignore "file not found" error (expected on first run)
+	// Fail on other errors (permission denied, corrupted file, etc.)
+	if err := state.Load(); err != nil && !os.IsNotExist(err) {
+		stateErr := errors.NewStateLoadError(err, stateFile)
+		// Log with structured fields
+		logger.Error("Failed to load state file", stateErr.LogFields())
+		logger.Info("State file may be corrupted. Delete %s to reset state.", stateFile)
+		os.Exit(1)
+	}
 
 	// Initialize AI agent based on configured provider (anthropic or ollama)
 	agent, err := provider.NewAgent(cfg)

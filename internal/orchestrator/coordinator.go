@@ -11,6 +11,7 @@ import (
 	"intern/internal/ai"
 	"intern/internal/ai/agent"
 	"intern/internal/config"
+	"intern/internal/errors"
 	"intern/internal/indexer"
 	"intern/internal/repository"
 	"intern/internal/ticketing"
@@ -185,9 +186,16 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 	if base == "" {
 		base = "main"
 	}
-	_ = c.Repository.SwitchBranch(ctx, base)
+	if err := c.Repository.SwitchBranch(ctx, base); err != nil {
+		// Switching to base branch is critical - we need to be on the right branch
+		// before creating feature branches
+		return errors.NewRepoBranchError(err, base, "switch to").
+			WithContext("operation", "prepareRepository")
+	}
 	if err := c.Repository.SyncWithRemote(ctx); err != nil {
-		logger.Error("Sync failed", "error", err)
+		// Log but don't fail - sync is best-effort
+		// We can still work with slightly stale code
+		logger.Warn("Sync with remote failed (continuing with local state)", "error", err)
 	}
 	return nil
 }
@@ -198,9 +206,13 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
 	logger.Info("Creating branch", "branch", branchName)
 	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
-		return fmt.Errorf("create branch: %w", err)
+		return errors.NewRepoBranchError(err, branchName, "create").
+			WithContext("ticket_key", key)
 	}
-	_ = c.Repository.SwitchBranch(ctx, branchName)
+	if err := c.Repository.SwitchBranch(ctx, branchName); err != nil {
+		return errors.NewRepoBranchError(err, branchName, "switch to").
+			WithContext("ticket_key", key)
+	}
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 
