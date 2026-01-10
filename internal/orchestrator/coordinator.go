@@ -174,6 +174,20 @@ func backoffSleep(base time.Duration) {
 	time.Sleep(t)
 }
 
+// checkContext checks if the context has been cancelled and returns an appropriate error.
+// This allows for graceful shutdown at key checkpoints in ticket processing.
+func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
+	select {
+	case <-ctx.Done():
+		logger.Info("Context cancelled, stopping ticket processing",
+			"ticket", ticketKey,
+			"checkpoint", checkpoint)
+		return fmt.Errorf("context cancelled at %s: %w", checkpoint, ctx.Err())
+	default:
+		return nil
+	}
+}
+
 func (c *Coordinator) prepareRepository(ctx context.Context) error {
 	repoPath := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); os.IsNotExist(err) {
@@ -212,6 +226,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if err := c.Repository.SwitchBranch(ctx, branchName); err != nil {
 		return errors.NewRepoBranchError(err, branchName, "switch to").
 			WithContext("ticket_key", key)
+	}
+
+	// Checkpoint 1: Check for cancellation before expensive operations
+	if err := checkContext(ctx, key, "after branch setup"); err != nil {
+		return err
 	}
 
 	repoRoot := filepath.Join(os.Getenv("AGENT_WORKING_DIR"), c.Cfg.GitHubRepo)
@@ -262,6 +281,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if planErr != nil {
 		c.Metrics.IncAIPlanFailures()
 		return fmt.Errorf("AI planning failed: %w", planErr)
+	}
+
+	// Checkpoint 2: Check for cancellation after AI planning (expensive operation)
+	if err := checkContext(ctx, key, "after AI planning"); err != nil {
+		return err
 	}
 
 	// Update context strategy in usage metrics
@@ -340,6 +364,12 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			}
 		}
 	}
+
+	// Checkpoint 3: Check for cancellation after file operations (before commit)
+	if err := checkContext(ctx, key, "after file operations"); err != nil {
+		return err
+	}
+
 	if len(valid) > 0 {
 		if err := c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): apply planned changes", key)); err != nil {
 			return fmt.Errorf("commit: %w", err)
@@ -390,6 +420,11 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			"key", key,
 			"attempts", healResult.TotalAttempts,
 			"cost", healResult.TotalCost)
+	}
+
+	// Checkpoint 4: Check for cancellation before push/PR (point of no return)
+	if err := checkContext(ctx, key, "before push/PR"); err != nil {
+		return err
 	}
 
 	// Run final quality gates check for PR notes (should pass now)
