@@ -347,14 +347,14 @@ func NewTicketUpdateError(err error, ticketKey, status string) *AgentError {
 // Config errors
 func NewConfigMissingError(field string) *AgentError {
 	return New(ErrCodeConfigMissing, CategoryConfig, SeverityCritical,
-		"required configuration missing").
+		fmt.Sprintf("required configuration missing: %s", field)).
 		WithContext("field", field).
 		WithRetryable(false)
 }
 
 func NewConfigInvalidError(field string, value interface{}, reason string) *AgentError {
 	return New(ErrCodeConfigInvalid, CategoryConfig, SeverityCritical,
-		"invalid configuration value").
+		fmt.Sprintf("invalid configuration for %s: %s", field, reason)).
 		WithContext("field", field).
 		WithContext("value", value).
 		WithContext("reason", reason).
@@ -363,7 +363,7 @@ func NewConfigInvalidError(field string, value interface{}, reason string) *Agen
 
 func NewConfigConflictError(fields []string, reason string) *AgentError {
 	return New(ErrCodeConfigConflict, CategoryConfig, SeverityCritical,
-		"conflicting configuration").
+		fmt.Sprintf("conflicting configuration: %s", reason)).
 		WithContext("conflicting_fields", fields).
 		WithContext("reason", reason).
 		WithRetryable(false)
