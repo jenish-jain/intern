@@ -42,11 +42,6 @@ func init() {
 	RootCmd.AddCommand(commands.MetricsCmd)
 	RootCmd.AddCommand(commands.VersionCmd)
 
-<<<<<<< HEAD
 	// Configure default behavior - start the agent when no command is specified
 	RootCmd.CompletionOptions.DisableDefaultCmd = true
-=======
-	// Set start command as default but also available explicitly
-	RootCmd.SetArgs([]string{})
->>>>>>> abf338a (refactored main.go with propre command strtucture and dependencies)
 }

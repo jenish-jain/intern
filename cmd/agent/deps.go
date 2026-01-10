@@ -30,10 +30,6 @@ type Dependencies struct {
 
 // InitDependencies initializes all dependencies for the agent
 func InitDependencies(ctx context.Context) (*Dependencies, error) {
-<<<<<<< HEAD
-=======
-	// Load config
->>>>>>> abf338a (refactored main.go with propre command strtucture and dependencies)
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, err
