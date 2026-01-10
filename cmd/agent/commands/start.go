@@ -41,6 +41,7 @@ func startAgent(cmd *cobra.Command, args []string) error {
 		cancel()
 	}()
 
+	logger.Info("Starting AI Intern Agent MVP...")
 	deps.Coordinator.Run(ctx)
 
 	return nil

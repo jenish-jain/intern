@@ -30,24 +30,32 @@ type Dependencies struct {
 
 // InitDependencies initializes all dependencies for the agent
 func InitDependencies(ctx context.Context) (*Dependencies, error) {
+<<<<<<< HEAD
+=======
+	// Load config
+>>>>>>> abf338a (refactored main.go with propre command strtucture and dependencies)
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
 
+	// Initialize JIRA client
 	jiraClient, err := jiraraw.NewRawClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
 	if err != nil {
 		logger.Error("Failed to init JIRA client: %v", err)
 		return nil, err
 	}
 
+	// Health check for JIRA
 	if err := jiraClient.HealthCheck(context.Background()); err != nil {
 		logger.Error("JIRA health check failed: %v", err)
 		return nil, err
 	}
 
+	// Create ticketing service
 	ticketingSvc := ticketing.NewService(jiraClient)
 
+	// Create repository path manager
 	workingDir := cfg.WorkingDir
 	if workingDir == "" {
 		workingDir = "./workspace"
@@ -59,9 +67,11 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 		return nil, err
 	}
 
+	// Initialize GitHub client and repository service
 	githubClient := github.NewClient(cfg.GitHubToken, cfg.GitHubOwner, cfg.GitHubRepo, repoPaths)
 	repoSvc := repository.NewRepositoryService(githubClient)
 
+	// Load state
 	stateFile := "agent_state.jsonc"
 	state := orchestrator.NewState(stateFile)
 
@@ -75,6 +85,7 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 		return nil, err
 	}
 
+	// Initialize AI agent based on configured provider
 	agent, err := provider.NewAgent(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize AI agent: %v", err)
@@ -82,6 +93,7 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 	}
 	logger.Info("Initialized AI provider", "provider", cfg.AIProvider)
 
+	// Create coordinator
 	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state, repoPaths)
 
 	return &Dependencies{
