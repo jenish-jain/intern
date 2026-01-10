@@ -26,6 +26,6 @@ func showVersion(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Go Version: %s\n", runtime.Version())
 	fmt.Printf("OS:         %s\n", runtime.GOOS)
 	fmt.Printf("Arch:       %s\n", runtime.GOARCH)
-	fmt.Println("=== End Version ===\n")
+	fmt.Println("=== End Version ===")
 	return nil
 }
