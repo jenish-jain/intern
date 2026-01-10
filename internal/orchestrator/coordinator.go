@@ -20,7 +20,7 @@ import (
 )
 
 type Coordinator struct {
-	Ticketing  *ticketing.TicketingService
+	Ticketing  *ticketing.Service
 	Repository *repository.RepositoryService
 	Agent      agent.Agent
 	Cfg        *config.Config
@@ -29,7 +29,7 @@ type Coordinator struct {
 	RepoPaths  *repository.RepositoryPath // Centralized path management
 }
 
-func NewCoordinator(ticketing *ticketing.TicketingService, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
+func NewCoordinator(ticketing *ticketing.Service, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
 	return &Coordinator{Ticketing: ticketing, Repository: repository, Agent: agent, Cfg: cfg, State: state, Metrics: NewMetrics(), RepoPaths: repoPaths}
 }
 
