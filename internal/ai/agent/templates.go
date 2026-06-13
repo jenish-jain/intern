@@ -2,8 +2,14 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
+
+// maxFixContextFileBytes caps how much of any single file's content is
+// included in the fix-errors prompt, keeping prompt size bounded when
+// previous changes touched large files.
+const maxFixContextFileBytes = 20 * 1024
 
 // PlanPromptOptions configures the prompt generation
 type PlanPromptOptions struct {
@@ -11,18 +17,22 @@ type PlanPromptOptions struct {
 }
 
 // BuildPlanChangesPrompt builds a strict JSON-only prompt for planning code changes.
-// It asks for a JSON array of CodeChange with optional content_b64 to avoid escaping issues.
-func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext string, opts PlanPromptOptions) string {
-	var rules []string
-	rules = append(rules, "Output ONLY compact JSON. No markdown, no backticks, no commentary.follow the instructions given in ticket carefully and adher to acceptance criteria if any in the ticket and make sure all are fullfilled and don't add any additional changes that are not in the ticket.")
-	rules = append(rules, "Schema: [{\"path\":\"relative/path.ext\",\"operation\":\"create|update\",\"content\":\"full file content\"}]")
-	if opts.AllowBase64 {
-		rules = append(rules, "You MAY use {\"content_b64\":\"<base64>\"} instead of content for large or complex content.")
-	}
-	rules = append(rules, "NEVER modify go.mod or go.sum files - these are managed by Go tooling (go get, go mod tidy). Dependencies are already configured.")
-	rules = append(rules, "try compiling code if possible before creating a changeset.")
-	rules = append(rules, "Use POSIX-style relative paths under repo root.")
 
+func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext string, opts PlanPromptOptions) string {
+	rules := []string{
+		"Output ONLY a compact JSON array. No markdown, no backticks, no commentary.",
+		`For NEW files: {"path":"relative/path.go","operation":"create","content":"<full file content>"}`,
+		`For EXISTING files: {"path":"relative/path.go","operation":"edit","edits":[{"old":"<exact lines copied verbatim from the file, including indentation>","new":"<replacement lines>"}]}`,
+		`To delete: {"path":"relative/path.go","operation":"delete"}`,
+		"NEVER use operation create on a file that already exists in the repository context - use edit.",
+		"In each edit, the old block MUST be copied character-for-character from the provided file content, and MUST be unique within the file. Include 2-3 unchanged surrounding lines for uniqueness.",
+		"Keep edits minimal: change only what the ticket requires. Do not reformat or rewrite untouched code.",
+		"NEVER modify go.mod or go.sum.",
+		"Fulfil every acceptance criterion in the ticket; add nothing beyond it.",
+		"Use POSIX-style relative paths under the repo root.",
+		`Files marked "(full content)" are shown verbatim and may be edited. Files marked "(signatures only)" show declarations without bodies and CANNOT be safely edited.`,
+		`Only use operation=edit on files shown with full content. If you need to modify a file shown as signatures-only, respond with ONLY {"need_files":["relative/path.go", ...]} (no array, no other keys) and nothing else - you will be given the full content and asked again.`,
+	}
 	return fmt.Sprintf(
 		"You are a senior Go engineer\nTicket: %s - %s\nDescription:\n%s\n\nRepository context (truncated):\n%s\n\nRules:\n- %s\n\nJSON:",
 		strings.TrimSpace(ticketKey),
@@ -35,26 +45,53 @@ func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoCon
 
 // BuildFixErrorsPrompt builds a prompt for fixing errors in previously generated code.
 // This is used by the self-healing system to iteratively improve code that fails quality gates.
-func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange, opts PlanPromptOptions) string {
-	var rules []string
-	rules = append(rules, "Output ONLY compact JSON. No markdown, no backticks, no commentary.")
-	rules = append(rules, "Schema: [{\"path\":\"relative/path.ext\",\"operation\":\"create|update\",\"content\":\"full file content\"}]")
-	if opts.AllowBase64 {
-		rules = append(rules, "You MAY use {\"content_b64\":\"<base64>\"} instead of content for large or complex content.")
+// fileContents maps repo-relative paths to their current on-disk content; it covers every
+// file from previousChanges plus every file referenced in errorOutput, so the model can see
+// what's actually on disk instead of guessing from a path list.
+func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange, fileContents map[string]string, opts PlanPromptOptions) string {
+	rules := []string{
+		"Output ONLY a compact JSON array. No markdown, no backticks, no commentary.",
+		`For files shown below: {"path":"relative/path.go","operation":"edit","edits":[{"old":"<exact lines copied verbatim from the file content below, including indentation>","new":"<replacement lines>"}]}`,
+		`For genuinely NEW files only: {"path":"relative/path.go","operation":"create","content":"<full file content>"}`,
+		`To delete: {"path":"relative/path.go","operation":"delete"}`,
+		"Prefer operation=edit for any file shown below - do NOT rewrite a whole file with operation=create. Full-file rewrites during healing are how regressions get introduced.",
+		"In each edit, the old block MUST be copied character-for-character from the file content below, and MUST be unique within the file. Include 2-3 unchanged surrounding lines for uniqueness.",
+		"Fix ONLY the errors shown below. Do not make unrelated changes.",
+		"NEVER modify go.mod or go.sum files - these are managed by Go tooling. If errors mention missing go.sum entries, ignore them - the build system will handle this.",
+		"Provide SIMPLE, MINIMAL implementations. Prefer standard library over third-party APIs.",
+		"For authentication: use ONLY jwt-go for JWT validation. Avoid complex third-party auth libraries.",
+		"If you see interface/type errors with third-party libraries, REMOVE the library usage entirely and use simpler alternatives.",
+		"Use POSIX-style relative paths under repo root.",
 	}
-	rules = append(rules, "NEVER modify go.mod or go.sum files - these are managed by Go tooling. If errors mention missing go.sum entries, ignore them - the build system will handle this.")
-	rules = append(rules, "Fix ONLY the errors shown below. Do not make unrelated changes.")
-	rules = append(rules, "Provide SIMPLE, MINIMAL implementations. Prefer standard library over third-party APIs.")
-	rules = append(rules, "For authentication: use ONLY jwt-go for JWT validation. Avoid complex third-party auth libraries.")
-	rules = append(rules, "If you see interface/type errors with third-party libraries, REMOVE the library usage entirely and use simpler alternatives.")
-	rules = append(rules, "Keep implementations under 100 lines when possible to ensure complete JSON output.")
-	rules = append(rules, "Use POSIX-style relative paths under repo root.")
 
-	// Build summary of previous changes
-	var changesSummary strings.Builder
-	changesSummary.WriteString("Previous changes you made:\n")
+	// Track which paths were touched by the previous attempt vs. merely
+	// referenced in the error output, for labeling below.
+	prevOps := make(map[string]CodeChangeOperation, len(previousChanges))
 	for _, change := range previousChanges {
-		changesSummary.WriteString(fmt.Sprintf("- %s (%s)\n", change.Path, change.Operation))
+		prevOps[change.Path] = change.Operation
+	}
+
+	paths := make([]string, 0, len(fileContents))
+	for p := range fileContents {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	var filesSection strings.Builder
+	filesSection.WriteString("Current file contents (this is the ground truth - read it before writing edits):\n")
+	for _, p := range paths {
+		label := "referenced in error output"
+		if op, ok := prevOps[p]; ok {
+			label = fmt.Sprintf("previously written via operation=%s", op)
+		}
+		content := fileContents[p]
+		if len(content) > maxFixContextFileBytes {
+			content = content[:maxFixContextFileBytes] + "\n... (truncated — focus edits on the error locations)"
+		}
+		filesSection.WriteString(fmt.Sprintf("\n--- %s (%s) ---\n%s\n", p, label, content))
+	}
+	if len(paths) == 0 {
+		filesSection.WriteString("(no file contents available)\n")
 	}
 
 	return fmt.Sprintf(
@@ -68,7 +105,7 @@ func BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput strin
 			"Rules:\n- %s\n\nJSON:",
 		strings.TrimSpace(ticketKey),
 		strings.TrimSpace(ticketSummary),
-		changesSummary.String(),
+		filesSection.String(),
 		errorType,
 		strings.TrimSpace(errorOutput),
 		strings.Join(rules, "\n- "),

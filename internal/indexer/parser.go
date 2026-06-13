@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -362,6 +363,67 @@ func writeFuncType(sb *strings.Builder, ft *ast.FuncType, fset *token.FileSet) {
 		if len(ft.Results.List) > 1 || len(ft.Results.List[0].Names) > 1 {
 			sb.WriteString(")")
 		}
+	}
+}
+
+// ExtractExportedSymbols parses Go source and returns the sorted, exported
+// top-level symbol names it declares: function and type/const/var names, with
+// methods qualified as "Receiver.Method". Used to diff a file's public API
+// before and after a change (see internal/journal).
+func ExtractExportedSymbols(src []byte) ([]string, error) {
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var symbols []string
+	for _, decl := range node.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if !d.Name.IsExported() {
+				continue
+			}
+			name := d.Name.Name
+			if d.Recv != nil && len(d.Recv.List) > 0 {
+				if recv := receiverTypeName(d.Recv.List[0].Type); recv != "" {
+					name = recv + "." + name
+				}
+			}
+			symbols = append(symbols, name)
+
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if s.Name.IsExported() {
+						symbols = append(symbols, s.Name.Name)
+					}
+				case *ast.ValueSpec:
+					for _, name := range s.Names {
+						if name.IsExported() {
+							symbols = append(symbols, name.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	sort.Strings(symbols)
+	return symbols, nil
+}
+
+// receiverTypeName returns the (possibly pointer) receiver's type name,
+// or "" if it can't be determined.
+func receiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(t.X)
+	case *ast.Ident:
+		return t.Name
+	default:
+		return ""
 	}
 }
 

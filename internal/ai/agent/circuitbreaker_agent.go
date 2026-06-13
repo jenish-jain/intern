@@ -46,13 +46,14 @@ func NewCircuitBreakerAgent(agent Agent, config circuitbreaker.Config) *CircuitB
 }
 
 // PlanChanges wraps the underlying agent's PlanChanges with circuit breaker protection
-func (a *CircuitBreakerAgent) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]CodeChange, *UsageMetrics, error) {
+func (a *CircuitBreakerAgent) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]CodeChange, []string, *UsageMetrics, error) {
 	var changes []CodeChange
+	var needFiles []string
 	var metrics *UsageMetrics
 	var err error
 
 	cbErr := a.circuitBreaker.Execute(ctx, func(ctx context.Context) error {
-		changes, metrics, err = a.agent.PlanChanges(ctx, ticketKey, ticketSummary, ticketDescription, repoContext)
+		changes, needFiles, metrics, err = a.agent.PlanChanges(ctx, ticketKey, ticketSummary, ticketDescription, repoContext)
 		return err
 	})
 
@@ -63,21 +64,21 @@ func (a *CircuitBreakerAgent) PlanChanges(ctx context.Context, ticketKey, ticket
 			"state", a.circuitBreaker.State().String(),
 			"failures", a.circuitBreaker.Failures(),
 			"error", cbErr)
-		return nil, nil, fmt.Errorf("AI service unavailable (circuit breaker %s): %w", a.circuitBreaker.State().String(), cbErr)
+		return nil, nil, nil, fmt.Errorf("AI service unavailable (circuit breaker %s): %w", a.circuitBreaker.State().String(), cbErr)
 	}
 
 	// Return the actual result (might still be an error from the AI call itself)
-	return changes, metrics, err
+	return changes, needFiles, metrics, err
 }
 
 // FixErrors wraps the underlying agent's FixErrors with circuit breaker protection
-func (a *CircuitBreakerAgent) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange) ([]CodeChange, *UsageMetrics, error) {
+func (a *CircuitBreakerAgent) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []CodeChange, fileContents map[string]string) ([]CodeChange, *UsageMetrics, error) {
 	var changes []CodeChange
 	var metrics *UsageMetrics
 	var err error
 
 	cbErr := a.circuitBreaker.Execute(ctx, func(ctx context.Context) error {
-		changes, metrics, err = a.agent.FixErrors(ctx, ticketKey, ticketSummary, errorType, errorOutput, previousChanges)
+		changes, metrics, err = a.agent.FixErrors(ctx, ticketKey, ticketSummary, errorType, errorOutput, previousChanges, fileContents)
 		return err
 	})
 

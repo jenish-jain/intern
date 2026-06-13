@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"intern/internal/ai/agent"
@@ -62,30 +63,94 @@ func runGoBuild(ctx context.Context, repoPath string) (string, error) {
 	return runQualityGate(ctx, repoPath, "go", "build", "./...")
 }
 
-// applyCodeChange writes a code change to disk or deletes a file
+// applyCodeChange applies a single healing fix to disk, mirroring the
+// create/edit/delete switch used for the initial plan in coordinator.go.
 func applyCodeChange(repoPath string, change agent.CodeChange) error {
 	absPath := filepath.Join(repoPath, change.Path)
 
-	if change.Operation == agent.OperationDelete {
-		// Delete the file
+	switch change.Operation {
+	case agent.OperationDelete:
 		if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("delete %s: %w", change.Path, err)
 		}
 		logger.Debug("Deleted file during self-healing", "path", change.Path)
 		return nil
+	case agent.OperationEdit:
+		if err := applyEditChange(repoPath, change); err != nil {
+			return fmt.Errorf("edit %s: %w", change.Path, err)
+		}
+		logger.Debug("Edited file during self-healing", "path", change.Path)
+		return nil
+	case agent.OperationCreate:
+		if _, err := os.Stat(absPath); err == nil {
+			return fmt.Errorf("create %s: file already exists (use operation=edit)", change.Path)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat %s: %w", change.Path, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			return fmt.Errorf("mkdir: %w", err)
+		}
+		if err := os.WriteFile(absPath, []byte(change.Content), 0644); err != nil {
+			return fmt.Errorf("write %s: %w", change.Path, err)
+		}
+		logger.Debug("Created file during self-healing", "path", change.Path)
+		return nil
+	default:
+		return fmt.Errorf("%s: unknown operation %q", change.Path, change.Operation)
+	}
+}
+
+// goFileRefRe matches Go compiler/test output lines like
+// "./internal/foo/bar.go:23:4: undefined: baz" and captures the file path.
+var goFileRefRe = regexp.MustCompile(`([A-Za-z0-9_./\-]+\.go):\d+`)
+
+// extractFilePathsFromErrors returns the de-duplicated set of repo-relative
+// .go file paths referenced in quality-gate error output.
+func extractFilePathsFromErrors(errorOutput string) []string {
+	matches := goFileRefRe.FindAllStringSubmatch(errorOutput, -1)
+	seen := make(map[string]bool, len(matches))
+	var paths []string
+	for _, m := range matches {
+		p := strings.TrimPrefix(m[1], "./")
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+// collectFileContents reads the current on-disk content of every file in
+// previousChanges plus every file referenced in errorOutput, so the AI sees
+// what's actually on disk instead of guessing from a path list. Missing or
+// unreadable files are silently skipped.
+func collectFileContents(repoPath string, previousChanges []agent.CodeChange, errorOutput string) map[string]string {
+	fileContents := make(map[string]string)
+
+	addFile := func(relPath string) {
+		clean := filepath.Clean(strings.TrimPrefix(relPath, "./"))
+		if clean == "" || clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+			return
+		}
+		if _, exists := fileContents[clean]; exists {
+			return
+		}
+		data, err := os.ReadFile(filepath.Join(repoPath, clean))
+		if err != nil {
+			return
+		}
+		fileContents[clean] = string(data)
 	}
 
-	// Create parent directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
+	for _, ch := range previousChanges {
+		addFile(ch.Path)
+	}
+	for _, p := range extractFilePathsFromErrors(errorOutput) {
+		addFile(p)
 	}
 
-	// Write the file content
-	if err := os.WriteFile(absPath, []byte(change.Content), 0644); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-
-	return nil
+	return fileContents
 }
 
 // tryHealErrors attempts to fix errors by calling the AI agent's FixErrors method
@@ -100,8 +165,12 @@ func (c *Coordinator) tryHealErrors(
 		"error_type", errorType,
 		"previous_changes", len(previousChanges))
 
+	// Give the model the ground truth: current on-disk content for every file
+	// it previously touched plus every file referenced in the error output.
+	fileContents := collectFileContents(repoPath, previousChanges, errorOutput)
+
 	// Call AI to generate fixes
-	fixes, metrics, err := c.Agent.FixErrors(ctx, ticketKey, ticketSummary, errorType, errorOutput, previousChanges)
+	fixes, metrics, err := c.Agent.FixErrors(ctx, ticketKey, ticketSummary, errorType, errorOutput, previousChanges, fileContents)
 	if err != nil {
 		return nil, fmt.Errorf("AI fix generation failed: %w", err)
 	}

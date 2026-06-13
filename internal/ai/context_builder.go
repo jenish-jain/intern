@@ -74,17 +74,27 @@ func hasAnySuffix(s string, suff ...string) bool {
 	return false
 }
 
+// fullContentTierSize is the number of highest-scored files rendered with
+// full content; the rest are rendered as signatures-only via
+// ExtractMinimalContext. The model can only produce valid edit "old" blocks
+// for files it has seen verbatim, so this tiering bounds which files are
+// eligible for operation=edit on the first planning call.
+const fullContentTierSize = 4
+
 // BuildSmartRepoContext builds repository context using intelligent file selection
 // based on keywords extracted from ticket description.
 // Falls back to BuildRepoContext if index is not available or keywords are empty.
 // Uses context caching to avoid rebuilding common files repeatedly.
-func BuildSmartRepoContext(repoRoot, ticketDescription string, maxFiles int) (string, error) {
-	return BuildSmartRepoContextWithCache(repoRoot, ticketDescription, maxFiles, DefaultCacheConfig())
+// forceFullContent names additional files (beyond the top-scored tier) that
+// must be rendered with full content - used for the retrieval pass when the
+// AI responds with {"need_files":[...]}.
+func BuildSmartRepoContext(repoRoot, ticketDescription string, maxFiles int, forceFullContent []string) (string, error) {
+	return BuildSmartRepoContextWithCache(repoRoot, ticketDescription, maxFiles, DefaultCacheConfig(), forceFullContent)
 }
 
 // BuildSmartRepoContextWithCache builds repository context with caching support.
 // It combines a cached base context (core files) with ticket-specific context (relevant files).
-func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles int, cacheConfig CacheConfig) (string, error) {
+func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles int, cacheConfig CacheConfig, forceFullContent []string) (string, error) {
 	var baseContext string
 	maxBytesPerFile := 32 * 1024
 
@@ -150,7 +160,41 @@ func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles
 	// Select top files from filtered results
 	topScores := indexer.SelectTopFiles(filteredScores, maxFiles)
 
-	// Build ticket-specific context from top files
+	// Determine which files get rendered with full content: the top-scored
+	// tier, plus any files explicitly requested via forceFullContent (the
+	// retrieval pass for {"need_files":[...]}).
+	fullContent := make(map[string]bool, fullContentTierSize+len(forceFullContent))
+	for i, fileScore := range topScores {
+		if i < fullContentTierSize {
+			fullContent[fileScore.Path] = true
+		}
+	}
+
+	// Files forced into the full-content tier that weren't already selected
+	// must still be added to the rendered set, e.g. a file the AI asked for
+	// that didn't score highly enough for the initial top-N selection.
+	selected := topScores
+	selectedPaths := make(map[string]bool, len(selected))
+	for _, fileScore := range selected {
+		selectedPaths[fileScore.Path] = true
+	}
+	for _, p := range forceFullContent {
+		fullContent[p] = true
+		if selectedPaths[p] {
+			continue
+		}
+		score := 0.0
+		for _, s := range scores {
+			if s.Path == p {
+				score = s.Score
+				break
+			}
+		}
+		selected = append(selected, indexer.FileScore{Path: p, Score: score})
+		selectedPaths[p] = true
+	}
+
+	// Build ticket-specific context from selected files
 	var sb strings.Builder
 
 	// Add base context first if available
@@ -163,14 +207,25 @@ func BuildSmartRepoContextWithCache(repoRoot, ticketDescription string, maxFiles
 	// Add ticket-specific context
 	sb.WriteString(fmt.Sprintf("# Ticket-Specific Context (Smart Selection)\n"))
 	sb.WriteString(fmt.Sprintf("# Based on keywords: %v\n", keywords[:util.Min(5, len(keywords))]))
-	sb.WriteString(fmt.Sprintf("# Selected %d most relevant files\n\n", len(topScores)))
+	sb.WriteString(fmt.Sprintf("# Selected %d most relevant files\n\n", len(selected)))
 
-	for _, fileScore := range topScores {
+	for _, fileScore := range selected {
 		filePath := filepath.Join(repoRoot, fileScore.Path)
 
-		sb.WriteString(fmt.Sprintf("\n## FILE: %s (relevance: %.1f)\n", fileScore.Path, fileScore.Score))
+		if fullContent[fileScore.Path] {
+			sb.WriteString(fmt.Sprintf("\n## FILE: %s (relevance: %.1f, full content)\n", fileScore.Path, fileScore.Score))
+			data, readErr := os.ReadFile(filePath)
+			if readErr != nil {
+				continue
+			}
+			sb.Write(data)
+			sb.WriteString("\n")
+			continue
+		}
 
-		// Extract minimal context for Go files, full content for others
+		sb.WriteString(fmt.Sprintf("\n## FILE: %s (relevance: %.1f, signatures only)\n", fileScore.Path, fileScore.Score))
+
+		// Extract minimal context (signatures only) for Go files
 		context, err := indexer.ExtractMinimalContext(filePath)
 		if err != nil {
 			// If extraction fails, try reading file directly

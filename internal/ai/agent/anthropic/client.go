@@ -3,7 +3,6 @@ package anthropic
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,8 +44,9 @@ func NewClient(apiKey string) *Client {
 }
 
 // PlanChanges asks the model to emit a minimal JSON array of CodeChange items.
-// Returns the code changes, usage metrics for cost tracking, and any error.
-func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+// Returns the code changes (or needFiles, if the model requested full content
+// for additional files), usage metrics for cost tracking, and any error.
+func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, []string, *agent.UsageMetrics, error) {
 	prompt := agent.BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext, agent.PlanPromptOptions{AllowBase64: true})
 	logger.Debug("prompt in anthropic", "prompt", prompt)
 
@@ -57,12 +57,12 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.APIKey)
@@ -70,64 +70,76 @@ func (c *Client) PlanChanges(ctx context.Context, ticketKey, ticketSummary, tick
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
-			return nil, nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
+			return nil, nil, nil, fmt.Errorf("anthropic error %d: failed to read response body: %w", resp.StatusCode, readErr)
 		}
-		return nil, nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
+		return nil, nil, nil, fmt.Errorf("anthropic error %d: %s", resp.StatusCode, string(b))
 	}
 	var cg codeGenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cg); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(cg.Content) == 0 {
-		return nil, nil, fmt.Errorf("empty anthropic response")
+		return nil, nil, nil, fmt.Errorf("empty anthropic response")
+	}
+	if cg.StopReason == "max_tokens" {
+		return nil, nil, nil, fmt.Errorf(
+			"response truncated at max_tokens (%d output tokens) - plan too large, reduce scope or split the ticket",
+			cg.Usage.OutputTokens)
 	}
 	raw := agent.SanitizeResponse(cg.Content[0].Text)
 	logger.Debug("AI response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
 
+	// Build usage metrics from API response
+	metrics := c.buildUsageMetrics(&cg.Usage, len(repoContext))
+
+	// The model may ask for full content of files currently shown
+	// signatures-only instead of producing changes - see BuildPlanChangesPrompt.
+	if needFiles := agent.ParseNeedFiles(raw); len(needFiles) > 0 {
+		logger.Info("Model requested full content for additional files", "files", needFiles)
+		return nil, needFiles, metrics, nil
+	}
+
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		// Try to fix truncated JSON (common when model stops mid-generation)
-		fixed := attemptJSONFix(raw)
-		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
-			logger.Warn("JSON was truncated, auto-completed successfully",
-				"original_length", len(raw),
-				"fixed_length", len(fixed))
-		} else {
-			// Log the full response on error for debugging
+		repaired := false
+		if cg.StopReason == "end_turn" {
+			// Last resort: the model reported a normal stop but emitted
+			// cosmetically malformed JSON (e.g. an extra brace). Genuine
+			// truncation is already handled above via stop_reason ==
+			// "max_tokens", so reaching here with a parse error means
+			// something is off with the model's output - log loudly.
+			fixed := attemptJSONFix(raw)
+			if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+				logger.Error("JSON required cosmetic repair despite stop_reason=end_turn - investigate model output",
+					"original_length", len(raw),
+					"fixed_length", len(fixed),
+					"original_preview", raw[:util.Min(500, len(raw))])
+				repaired = true
+			}
+		}
+		if !repaired {
 			logger.Error("Failed to parse AI response",
 				"error", err,
 				"response_length", len(raw),
 				"response_preview", raw[:util.Min(1000, len(raw))],
 				"stop_reason", cg.StopReason)
-			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
-		}
-	}
-	// Decode base64 content if provided
-	for i := range changes {
-		if changes[i].Content == "" && changes[i].ContentB64 != "" {
-			data, derr := base64.StdEncoding.DecodeString(changes[i].ContentB64)
-			if derr == nil {
-				changes[i].Content = string(data)
-			}
+			return nil, nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
 		}
 	}
 
-	// Build usage metrics from API response
-	metrics := c.buildUsageMetrics(&cg.Usage, len(repoContext))
-
-	return changes, metrics, nil
+	return changes, nil, metrics, nil
 }
 
 // FixErrors generates fixes for errors in previously generated code.
 // This is used by the self-healing system to iteratively improve code that fails quality gates.
-func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange) ([]agent.CodeChange, *agent.UsageMetrics, error) {
-	prompt := agent.BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput, previousChanges, agent.PlanPromptOptions{AllowBase64: true})
+func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange, fileContents map[string]string) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+	prompt := agent.BuildFixErrorsPrompt(ticketKey, ticketSummary, errorType, errorOutput, previousChanges, fileContents, agent.PlanPromptOptions{AllowBase64: true})
 	logger.Debug("fix errors prompt in anthropic", "prompt", prompt)
 
 	reqBody := codeGenRequest{
@@ -167,39 +179,39 @@ func (c *Client) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorT
 	if len(cg.Content) == 0 {
 		return nil, nil, fmt.Errorf("empty anthropic response")
 	}
+	if cg.StopReason == "max_tokens" {
+		return nil, nil, fmt.Errorf(
+			"response truncated at max_tokens (%d output tokens) - plan too large, reduce scope or split the ticket",
+			cg.Usage.OutputTokens)
+	}
 	raw := agent.SanitizeResponse(cg.Content[0].Text)
 	logger.Debug("AI fix response (sanitized)", "length", len(raw), "preview", raw[:util.Min(500, len(raw))])
 
 	var changes []agent.CodeChange
 	if err := json.Unmarshal([]byte(raw), &changes); err != nil {
-		// Try to fix truncated JSON (common when model stops mid-generation)
-		fixed := attemptJSONFix(raw)
-		if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
-			logger.Warn("JSON was truncated, auto-completed successfully",
-				"original_length", len(raw),
-				"fixed_length", len(fixed))
-		} else {
+		repaired := false
+		if cg.StopReason == "end_turn" {
+			// Last resort: the model reported a normal stop but emitted
+			// cosmetically malformed JSON (e.g. an extra brace). Genuine
+			// truncation is already handled above via stop_reason ==
+			// "max_tokens", so reaching here with a parse error means
+			// something is off with the model's output - log loudly.
+			fixed := attemptJSONFix(raw)
+			if fixErr := json.Unmarshal([]byte(fixed), &changes); fixErr == nil {
+				logger.Error("JSON required cosmetic repair despite stop_reason=end_turn - investigate model output",
+					"original_length", len(raw),
+					"fixed_length", len(fixed),
+					"original_preview", raw[:util.Min(500, len(raw))])
+				repaired = true
+			}
+		}
+		if !repaired {
 			logger.Error("Failed to parse AI fix response",
-				"original_error", err,
-				"fix_error", fixErr,
+				"error", err,
 				"response_length", len(raw),
-				"fixed_length", len(fixed),
-				"response_preview", raw[:util.Min(500, len(raw))],
-				"fixed_preview", fixed[:util.Min(500, len(fixed))],
-				"response_suffix", raw[util.Max(0, len(raw)-200):],
-				"fixed_suffix", fixed[util.Max(0, len(fixed)-200):],
+				"response_preview", raw[:util.Min(1000, len(raw))],
 				"stop_reason", cg.StopReason)
 			return nil, nil, fmt.Errorf("invalid JSON from model: %w", err)
-		}
-	}
-
-	// Decode base64 content if provided
-	for i := range changes {
-		if changes[i].Content == "" && changes[i].ContentB64 != "" {
-			data, derr := base64.StdEncoding.DecodeString(changes[i].ContentB64)
-			if derr == nil {
-				changes[i].Content = string(data)
-			}
 		}
 	}
 

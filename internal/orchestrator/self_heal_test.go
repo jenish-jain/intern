@@ -29,24 +29,27 @@ func TestApplyCodeChange(t *testing.T) {
 		{
 			name: "create new file",
 			change: agent.CodeChange{
-				Path:    "test.go",
-				Content: "package main\n\nfunc main() {}\n",
+				Path:      "test.go",
+				Operation: agent.OperationCreate,
+				Content:   "package main\n\nfunc main() {}\n",
 			},
 			wantErr: false,
 		},
 		{
 			name: "create nested file",
 			change: agent.CodeChange{
-				Path:    "internal/service/handler.go",
-				Content: "package service\n",
+				Path:      "internal/service/handler.go",
+				Operation: agent.OperationCreate,
+				Content:   "package service\n",
 			},
 			wantErr: false,
 		},
 		{
-			name: "overwrite existing file",
+			name: "create file with new content",
 			change: agent.CodeChange{
-				Path:    "existing.go",
-				Content: "package main\n// updated\n",
+				Path:      "existing.go",
+				Operation: agent.OperationCreate,
+				Content:   "package main\n// updated\n",
 			},
 			wantErr: false,
 		},
@@ -202,12 +205,12 @@ type mockHealingAgent struct {
 	fixesCalled   bool
 }
 
-func (m *mockHealingAgent) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+func (m *mockHealingAgent) PlanChanges(ctx context.Context, ticketKey, ticketSummary, ticketDescription, repoContext string) ([]agent.CodeChange, []string, *agent.UsageMetrics, error) {
 	m.planCalled = true
-	return nil, nil, nil
+	return nil, nil, nil, nil
 }
 
-func (m *mockHealingAgent) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange) ([]agent.CodeChange, *agent.UsageMetrics, error) {
+func (m *mockHealingAgent) FixErrors(ctx context.Context, ticketKey, ticketSummary, errorType, errorOutput string, previousChanges []agent.CodeChange, fileContents map[string]string) ([]agent.CodeChange, *agent.UsageMetrics, error) {
 	m.fixesCalled = true
 	return m.fixesResponse, &agent.UsageMetrics{EstimatedCost: 0.05}, m.fixesError
 }
@@ -225,7 +228,7 @@ func TestTryHealErrors(t *testing.T) {
 		{
 			name: "successful healing",
 			agentResponse: []agent.CodeChange{
-				{Path: "fixed.go", Operation: agent.OperationUpdate, Content: "package main\n\nfunc fixed() {}\n"},
+				{Path: "fixed.go", Operation: agent.OperationCreate, Content: "package main\n\nfunc fixed() {}\n"},
 			},
 			agentError: nil,
 			wantErr:    false,
@@ -337,7 +340,16 @@ func TestSelfHealingPipeline_WithBuildError(t *testing.T) {
 
 	mockAgent := &mockHealingAgent{
 		fixesResponse: []agent.CodeChange{
-			{Path: "main.go", Operation: agent.OperationUpdate, Content: "package main\n\nfunc main() {}\n"},
+			{
+				Path:      "main.go",
+				Operation: agent.OperationEdit,
+				Edits: []agent.EditHunk{
+					{
+						Old: "package main\n\nfunc main() {\n// missing brace\n",
+						New: "package main\n\nfunc main() {}\n",
+					},
+				},
+			},
 		},
 	}
 
@@ -375,7 +387,7 @@ func TestHealResult_Fields(t *testing.T) {
 		ErrorType:   "test",
 		ErrorOutput: "test failed",
 		FixedChanges: []agent.CodeChange{
-			{Path: "test.go", Operation: agent.OperationUpdate, Content: "fixed"},
+			{Path: "test.go", Operation: agent.OperationCreate, Content: "fixed"},
 		},
 		Metrics: &agent.UsageMetrics{
 			InputTokens:   100,

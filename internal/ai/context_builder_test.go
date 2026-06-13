@@ -207,7 +207,7 @@ func main() {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			context, err := BuildSmartRepoContext(tmpDir, tt.ticketDescription, 5)
+			context, err := BuildSmartRepoContext(tmpDir, tt.ticketDescription, 5, nil)
 			require.NoError(t, err)
 
 			for _, expected := range tt.expectedInContext {
@@ -232,7 +232,7 @@ func TestBuildSmartRepoContext_NoIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return error when index is missing
-	context, err := BuildSmartRepoContext(tmpDir, "Fix test bug", 10)
+	context, err := BuildSmartRepoContext(tmpDir, "Fix test bug", 10, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "file index not found")
 	assert.Empty(t, context)
@@ -251,7 +251,7 @@ func TestBuildSmartRepoContext_FallbackOnError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should return error for invalid index
-	context, err := BuildSmartRepoContext(tmpDir, "Fix bug", 10)
+	context, err := BuildSmartRepoContext(tmpDir, "Fix bug", 10, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load index")
 	assert.Empty(t, context)

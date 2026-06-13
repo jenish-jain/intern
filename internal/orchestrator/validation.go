@@ -46,13 +46,23 @@ func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs
 			logger.Debug("Skipping path not in allowed directories", "path", clean, "first_segment", first, "allowed_dirs", allowedDirs)
 			continue
 		}
-		// Ensure content is present (except for delete operations)
-		if strings.TrimSpace(ch.Content) == "" && ch.Operation != agent.OperationDelete {
-			logger.Debug("Skipping file with empty content", "path", clean)
-			continue
+		// Ensure a payload is present: create needs content, edit needs hunks,
+		// delete needs neither.
+		switch ch.Operation {
+		case agent.OperationDelete:
+		case agent.OperationEdit:
+			if len(ch.Edits) == 0 {
+				logger.Debug("Skipping edit with no hunks", "path", clean)
+				continue
+			}
+		default:
+			if strings.TrimSpace(ch.Content) == "" {
+				logger.Debug("Skipping file with empty content", "path", clean)
+				continue
+			}
 		}
 		logger.Debug("Accepting change", "path", clean, "operation", ch.Operation)
-		out = append(out, agent.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content})
+		out = append(out, agent.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content, Edits: ch.Edits})
 	}
 	logger.Debug("Validation complete", "accepted_changes", len(out), "rejected_changes", len(changes)-len(out))
 	if len(out) == 0 {

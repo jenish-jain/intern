@@ -110,7 +110,7 @@ func TestValidatePlannedChanges(t *testing.T) {
 			changes: []agent.CodeChange{
 				{Path: "internal/new.go", Content: "package internal", Operation: agent.OperationCreate},
 				{Path: "cmd/old.go", Content: "", Operation: agent.OperationDelete},
-				{Path: "pkg/updated.go", Content: "package pkg", Operation: agent.OperationUpdate},
+				{Path: "pkg/updated.go", Content: "package pkg", Operation: agent.OperationCreate},
 			},
 			expected: 3,
 			hasError: false,

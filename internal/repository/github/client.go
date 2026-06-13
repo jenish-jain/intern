@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"intern/internal/repository"
@@ -255,6 +257,21 @@ func (c *githubClient) CreatePullRequest(ctx context.Context, baseBranch, headBr
 		return "", fmt.Errorf("pull request created but URL missing")
 	}
 	return pr.GetHTMLURL(), nil
+}
+
+// IsPRMerged reports whether the PR at prURL (e.g.
+// "https://github.com/owner/repo/pull/123") has been merged.
+func (c *githubClient) IsPRMerged(ctx context.Context, prURL string) (bool, error) {
+	numStr := prURL[strings.LastIndex(prURL, "/")+1:]
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return false, fmt.Errorf("invalid PR URL %q: %w", prURL, err)
+	}
+	pr, _, err := c.ghClient.PullRequests.Get(ctx, c.owner, c.repo, num)
+	if err != nil {
+		return false, fmt.Errorf("failed to get PR #%d: %w", num, err)
+	}
+	return pr.GetMerged(), nil
 }
 
 func (c *githubClient) HasLocalChanges(ctx context.Context) (bool, error) {

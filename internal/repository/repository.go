@@ -15,6 +15,7 @@ type RepositoryClient interface {
 	Push(ctx context.Context, branchName string) error
 	CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error)
 	HasLocalChanges(ctx context.Context) (bool, error)
+	IsPRMerged(ctx context.Context, prURL string) (bool, error)
 }
 
 type RepositoryService struct {
@@ -63,4 +64,8 @@ func (r *RepositoryService) CreatePullRequest(ctx context.Context, baseBranch, h
 
 func (r *RepositoryService) HasLocalChanges(ctx context.Context) (bool, error) {
 	return r.Client.HasLocalChanges(ctx)
+}
+
+func (r *RepositoryService) IsPRMerged(ctx context.Context, prURL string) (bool, error) {
+	return r.Client.IsPRMerged(ctx, prURL)
 }
