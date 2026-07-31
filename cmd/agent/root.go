@@ -36,6 +36,7 @@ func init() {
 
 	// Add all subcommands
 	RootCmd.AddCommand(commands.StartCmd)
+	RootCmd.AddCommand(commands.ServeCmd)
 	RootCmd.AddCommand(commands.InitCmd)
 	RootCmd.AddCommand(commands.BuildIndexCmd)
 	RootCmd.AddCommand(commands.StatusCmd)

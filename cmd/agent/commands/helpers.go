@@ -12,6 +12,7 @@ import (
 	"intern/internal/repository/github"
 	"intern/internal/ticketing"
 	jiraraw "intern/internal/ticketing/jira-raw"
+	slackticketing "intern/internal/ticketing/slack"
 
 	logger "github.com/jenish-jain/logger"
 )
@@ -19,7 +20,8 @@ import (
 // Dependencies holds all initialized dependencies for the application
 type Dependencies struct {
 	Config       *config.Config
-	JiraClient   interface{} // JIRA ticketing client
+	JiraClient   interface{}            // JIRA ticketing client
+	SlackClient  *slackticketing.Client // set only when TicketingMode == "slack"
 	TicketingSvc *ticketing.Service
 	GitHubClient repository.RepositoryClient
 	RepoSvc      *repository.RepositoryService
@@ -42,21 +44,37 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 		return nil, err
 	}
 
-	// Initialize JIRA client
-	jiraClient, err := jiraraw.NewRawClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
-	if err != nil {
-		logger.Error("Failed to init JIRA client: %v", err)
-		return nil, err
-	}
+	// Initialize the ticketing backend based on TICKETING_MODE
+	var jiraClient interface{}
+	var slackClient *slackticketing.Client
+	var ticketingSvc *ticketing.Service
 
-	// Health check for JIRA
-	if err := jiraClient.HealthCheck(context.Background()); err != nil {
-		logger.Error("JIRA health check failed: %v", err)
-		return nil, err
+	switch cfg.TicketingMode {
+	case "slack":
+		client, err := slackticketing.NewSlackClient(cfg.SlackBotToken)
+		if err != nil {
+			logger.Error("Failed to init Slack client: %v", err)
+			return nil, err
+		}
+		if err := client.HealthCheck(context.Background()); err != nil {
+			logger.Error("Slack health check failed: %v", err)
+			return nil, err
+		}
+		slackClient = client
+		ticketingSvc = ticketing.NewService(client)
+	default: // "jira"
+		client, err := jiraraw.NewRawClient(cfg.JiraURL, cfg.JiraEmail, cfg.JiraAPIToken)
+		if err != nil {
+			logger.Error("Failed to init JIRA client: %v", err)
+			return nil, err
+		}
+		if err := client.HealthCheck(context.Background()); err != nil {
+			logger.Error("JIRA health check failed: %v", err)
+			return nil, err
+		}
+		jiraClient = client
+		ticketingSvc = ticketing.NewService(client)
 	}
-
-	// Create ticketing service
-	ticketingSvc := ticketing.NewService(jiraClient)
 
 	// Create repository path manager
 	workingDir := cfg.WorkingDir
@@ -102,6 +120,7 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 	return &Dependencies{
 		Config:       cfg,
 		JiraClient:   jiraClient,
+		SlackClient:  slackClient,
 		TicketingSvc: ticketingSvc,
 		GitHubClient: githubClient,
 		RepoSvc:      repoSvc,

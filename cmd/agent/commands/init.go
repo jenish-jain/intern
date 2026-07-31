@@ -18,13 +18,23 @@ var InitCmd = &cobra.Command{
 func initConfig(cmd *cobra.Command, args []string) error {
 	logger.Info("Creating sample configuration files...")
 
-	envContent := `JIRA_URL="https://company.atlassian.net"
+	envContent := `# Ticketing Mode
+# Options: "jira" (default, polling loop) or "slack" (HTTP webhook, request-driven)
+TICKETING_MODE="jira"
+
+JIRA_URL="https://company.atlassian.net"
 JIRA_EMAIL="ai-agent@company.com"
 JIRA_API_TOKEN="your-jira-api-token"
 JIRA_PROJECT_KEY="PROJ"
 JIRA_TRANSITION_TO_DO="11"
 JIRA_TRANSITION_IN_PROGRESS="21"
 JIRA_TRANSITION_DONE="31"
+
+# Slack Configuration (required if TICKETING_MODE=slack)
+# See docs/SLACK_SETUP.md for how to create the app and get these values.
+# SLACK_BOT_TOKEN="xoxb-your-bot-token"
+# SLACK_SIGNING_SECRET="your-signing-secret"
+# PORT=8080  # HTTP port for the serve command; Cloud Run sets this automatically
 
 GITHUB_TOKEN="your-github-token"
 GITHUB_OWNER="company"

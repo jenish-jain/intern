@@ -13,11 +13,22 @@ import (
 )
 
 type Config struct {
+	// TicketingMode selects the source of tickets/asks: "jira" (default, poll loop)
+	// or "slack" (HTTP webhook, request-driven — used for the Cloud Run deployment).
+	TicketingMode string
+
 	JiraURL         string
 	JiraEmail       string
 	JiraAPIToken    string
 	JiraProject     string
 	JiraTransitions map[string]string
+
+	SlackBotToken      string
+	SlackSigningSecret string
+
+	// Port is the HTTP listen port for `agent serve` (Slack webhook + healthz).
+	// Cloud Run injects this via the PORT env var.
+	Port string
 
 	GitHubToken string
 	GitHubOwner string
@@ -26,9 +37,9 @@ type Config struct {
 	AnthropicAPIKey string
 
 	// AI Provider configuration
-	AIProvider     string // "anthropic" or "ollama"
-	OllamaBaseURL  string // Ollama server URL (default: http://localhost:11434)
-	OllamaModel    string // Ollama model name (e.g., qwen2.5-coder:7b)
+	AIProvider    string // "anthropic" or "ollama"
+	OllamaBaseURL string // Ollama server URL (default: http://localhost:11434)
+	OllamaModel   string // Ollama model name (e.g., qwen2.5-coder:7b)
 
 	AgentUsername        string
 	PollingInterval      string
@@ -38,10 +49,10 @@ type Config struct {
 	BaseBranch   string
 	BranchPrefix string
 
-	ContextMaxFiles      int
-	ContextMaxBytes      int
-	ContextCacheEnabled  bool   // Enable context caching
-	ContextCacheTTL      string // Cache time-to-live (e.g., "1h", "30m")
+	ContextMaxFiles     int
+	ContextMaxBytes     int
+	ContextCacheEnabled bool   // Enable context caching
+	ContextCacheTTL     string // Cache time-to-live (e.g., "1h", "30m")
 
 	PlanMaxFiles     int
 	AllowedWriteDirs []string
@@ -50,11 +61,11 @@ type Config struct {
 	RunVetBeforePR   bool
 
 	// Self-healing configuration
-	SelfHealEnabled      bool // Enable self-healing for failed quality gates
-	SelfHealMaxAttempts  int  // Maximum healing attempts (default: 3)
-	SelfHealOnTests      bool // Retry on test failures
-	SelfHealOnVet        bool // Retry on vet failures
-	SelfHealOnBuild      bool // Retry on build failures
+	SelfHealEnabled     bool // Enable self-healing for failed quality gates
+	SelfHealMaxAttempts int  // Maximum healing attempts (default: 3)
+	SelfHealOnTests     bool // Retry on test failures
+	SelfHealOnVet       bool // Retry on vet failures
+	SelfHealOnBuild     bool // Retry on build failures
 
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 
@@ -68,6 +79,8 @@ func LoadConfig() (*Config, error) {
 	viper.AutomaticEnv()
 
 	cfg := &Config{
+		TicketingMode: viper.GetString("TICKETING_MODE"),
+
 		JiraURL:      viper.GetString("JIRA_URL"),
 		JiraEmail:    viper.GetString("JIRA_EMAIL"),
 		JiraAPIToken: viper.GetString("JIRA_API_TOKEN"),
@@ -77,6 +90,10 @@ func LoadConfig() (*Config, error) {
 			"In Progress": viper.GetString("JIRA_TRANSITION_IN_PROGRESS"),
 			"Done":        viper.GetString("JIRA_TRANSITION_DONE"),
 		},
+
+		SlackBotToken:      viper.GetString("SLACK_BOT_TOKEN"),
+		SlackSigningSecret: viper.GetString("SLACK_SIGNING_SECRET"),
+		Port:               viper.GetString("PORT"),
 
 		GitHubToken: viper.GetString("GITHUB_TOKEN"),
 		GitHubOwner: viper.GetString("GITHUB_OWNER"),
@@ -119,6 +136,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Defaults
+	if cfg.TicketingMode == "" {
+		cfg.TicketingMode = "jira" // Default to JIRA polling for backwards compatibility
+	}
+	if cfg.Port == "" {
+		cfg.Port = "8080"
+	}
 	if cfg.AIProvider == "" {
 		cfg.AIProvider = "anthropic" // Default to Anthropic for backwards compatibility
 	}
@@ -168,18 +191,41 @@ func LoadConfig() (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	// Validate required JIRA configuration
-	if c.JiraURL == "" {
-		return errors.NewConfigMissingError("JIRA_URL")
-	}
-	if c.JiraEmail == "" {
-		return errors.NewConfigMissingError("JIRA_EMAIL")
-	}
-	if c.JiraAPIToken == "" {
-		return errors.NewConfigMissingError("JIRA_API_TOKEN")
-	}
-	if c.JiraProject == "" {
-		return errors.NewConfigMissingError("JIRA_PROJECT_KEY")
+	// Validate ticketing mode and its required configuration
+	switch c.TicketingMode {
+	case "jira", "":
+		if c.JiraURL == "" {
+			return errors.NewConfigMissingError("JIRA_URL")
+		}
+		if c.JiraEmail == "" {
+			return errors.NewConfigMissingError("JIRA_EMAIL")
+		}
+		if c.JiraAPIToken == "" {
+			return errors.NewConfigMissingError("JIRA_API_TOKEN")
+		}
+		if c.JiraProject == "" {
+			return errors.NewConfigMissingError("JIRA_PROJECT_KEY")
+		}
+		if c.AgentUsername == "" {
+			return errors.NewConfigMissingError("AGENT_USERNAME")
+		}
+		if c.PollingInterval == "" {
+			return errors.NewConfigMissingError("POLLING_INTERVAL")
+		}
+		if _, err := time.ParseDuration(c.PollingInterval); err != nil {
+			return errors.NewConfigInvalidError("POLLING_INTERVAL", c.PollingInterval,
+				fmt.Sprintf("invalid duration format: %v (use: 30s, 5m, 1h, etc.)", err))
+		}
+	case "slack":
+		if c.SlackBotToken == "" {
+			return errors.NewConfigMissingError("SLACK_BOT_TOKEN")
+		}
+		if c.SlackSigningSecret == "" {
+			return errors.NewConfigMissingError("SLACK_SIGNING_SECRET")
+		}
+	default:
+		return errors.NewConfigInvalidError("TICKETING_MODE", c.TicketingMode,
+			"supported values: jira, slack")
 	}
 
 	// Validate required GitHub configuration
@@ -209,20 +255,6 @@ func (c *Config) Validate() error {
 	default:
 		return errors.NewConfigInvalidError("AI_PROVIDER", c.AIProvider,
 			"supported values: anthropic, ollama")
-	}
-
-	// Validate agent configuration
-	if c.AgentUsername == "" {
-		return errors.NewConfigMissingError("AGENT_USERNAME")
-	}
-
-	// Validate and parse polling interval
-	if c.PollingInterval == "" {
-		return errors.NewConfigMissingError("POLLING_INTERVAL")
-	}
-	if _, err := time.ParseDuration(c.PollingInterval); err != nil {
-		return errors.NewConfigInvalidError("POLLING_INTERVAL", c.PollingInterval,
-			fmt.Sprintf("invalid duration format: %v (use: 30s, 5m, 1h, etc.)", err))
 	}
 
 	// Validate concurrent tickets
