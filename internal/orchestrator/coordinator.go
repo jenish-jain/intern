@@ -366,37 +366,46 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	// Retrieval pass: the model asked to see the full content of files shown
 	// signatures-only (responded with {"need_files":[...]} instead of
 	// changes). Rebuild context with those files promoted to the
-	// full-content tier and plan again - this second call is cheap since the
-	// first response is just a short need_files list.
-	if len(needFiles) > 0 && usedSmartContext {
-		logger.Info("AI requested full content for additional files", "ticket", key, "files", needFiles)
+	// full-content tier and plan again - this is cheap since a need_files
+	// response is just a short list. Bounded and iterative: each round's
+	// need_files accumulate on top of prior rounds', so a model that still
+	// needs another file after seeing the first batch can ask again instead
+	// of being forced to guess at content it was never shown.
+	const maxRetrievalRounds = 3
+	fullContentFiles := needFiles
+	for round := 0; len(fullContentFiles) > 0 && usedSmartContext && round < maxRetrievalRounds; round++ {
+		logger.Info("AI requested full content for additional files", "ticket", key, "files", fullContentFiles, "round", round+1)
 
-		ctxStr2, ctxErr2 := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles, needFiles)
+		ctxStr2, ctxErr2 := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles, fullContentFiles)
 		if ctxErr2 != nil {
-			logger.Warn("Failed to rebuild context for requested files, proceeding without retrieval pass",
+			logger.Warn("Failed to rebuild context for requested files, proceeding without further retrieval",
 				"ticket", key, "error", ctxErr2)
-		} else {
-			ctxStr = priorWork + ctxStr2
-
-			var changes2 []agent.CodeChange
-			var usageMetrics2 *agent.UsageMetrics
-			planErr2, attempts2 := Retry(ctx, planBackoff, func() error {
-				ch, _, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
-				if e != nil {
-					return MakeTransient(e)
-				}
-				changes2 = ch
-				usageMetrics2 = metrics
-				return nil
-			})
-			c.Metrics.AddRetries(attempts2)
-			if planErr2 != nil {
-				c.Metrics.IncAIPlanFailures()
-				return fmt.Errorf("AI planning failed (retrieval pass): %w", planErr2)
-			}
-			changes = changes2
-			usageMetrics = sumUsageMetrics(usageMetrics, usageMetrics2)
+			break
 		}
+		ctxStr = priorWork + ctxStr2
+
+		var changes2 []agent.CodeChange
+		var needFiles2 []string
+		var usageMetrics2 *agent.UsageMetrics
+		planErr2, attempts2 := Retry(ctx, planBackoff, func() error {
+			ch, nf, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
+			if e != nil {
+				return MakeTransient(e)
+			}
+			changes2 = ch
+			needFiles2 = nf
+			usageMetrics2 = metrics
+			return nil
+		})
+		c.Metrics.AddRetries(attempts2)
+		if planErr2 != nil {
+			c.Metrics.IncAIPlanFailures()
+			return fmt.Errorf("AI planning failed (retrieval pass): %w", planErr2)
+		}
+		changes = changes2
+		usageMetrics = sumUsageMetrics(usageMetrics, usageMetrics2)
+
+		fullContentFiles = mergeUnique(fullContentFiles, needFiles2)
 	}
 
 	// Checkpoint 2: Check for cancellation after AI planning (expensive operation)
@@ -611,6 +620,15 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if base == "" {
 		base = "main"
 	}
+	// Surface any judgment calls the AI made while planning (e.g. renaming a
+	// resource to avoid a naming collision) so a human can confirm or
+	// override them, rather than the ticket silently failing on ambiguity.
+	for _, ch := range valid {
+		if ch.Note != "" {
+			notes = append(notes, fmt.Sprintf("%s: %s", ch.Path, ch.Note))
+		}
+	}
+
 	title := buildPRTitle(key, summary)
 	body := buildPRBody(key, summary, description, valid, notes)
 	var prURL string
@@ -767,4 +785,24 @@ func sumUsageMetrics(a, b *agent.UsageMetrics) *agent.UsageMetrics {
 			Keywords:      b.ContextStats.Keywords,
 		},
 	}
+}
+
+// mergeUnique returns the union of a and b, preserving a's order and
+// appending any elements of b not already present in a.
+func mergeUnique(a, b []string) []string {
+	seen := make(map[string]bool, len(a))
+	out := make([]string, 0, len(a)+len(b))
+	for _, v := range a {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, v := range b {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }

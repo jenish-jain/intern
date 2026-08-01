@@ -23,6 +23,10 @@ type CodeChange struct {
 	Operation CodeChangeOperation `json:"operation"`
 	Content   string              `json:"content,omitempty"` // create only
 	Edits     []EditHunk          `json:"edits,omitempty"`   // edit only
+	// Note is an optional, AI-authored explanation of a judgment call made
+	// on this change (e.g. renaming a resource to avoid a naming collision).
+	// Surfaced in the PR description so a human can confirm or override it.
+	Note string `json:"note,omitempty"`
 }
 
 // ParseNeedFiles checks whether raw is a {"need_files":["path", ...]}

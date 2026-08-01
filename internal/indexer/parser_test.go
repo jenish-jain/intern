@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,13 +200,36 @@ Line 5
 	assert.Contains(t, result, "Line 3")
 }
 
-func TestExtractMinimalContext_LargeNonGoFile(t *testing.T) {
-	// Create a large file with 100 lines
+func TestExtractMinimalContext_SmallNonGoFileNotTruncated(t *testing.T) {
+	// A file with many short lines but well under the full-content size
+	// threshold should be returned in full, not truncated to a prefix -
+	// declarative config files (e.g. Terraform) have no "head" that's more
+	// relevant than the rest, so blindly cutting them hides real content
+	// from the model instead of summarizing it.
 	var sb strings.Builder
 	for i := 1; i <= 100; i++ {
 		sb.WriteString("Line ")
 		sb.WriteString(string(rune('0' + i)))
 		sb.WriteString("\n")
+	}
+
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "small.txt")
+	err := os.WriteFile(testFile, []byte(sb.String()), 0644)
+	require.NoError(t, err)
+
+	result, err := ExtractMinimalContext(testFile)
+	require.NoError(t, err)
+
+	assert.NotContains(t, result, "... (truncated)")
+	assert.Contains(t, result, "Line ") // last line (100th)
+}
+
+func TestExtractMinimalContext_LargeNonGoFile(t *testing.T) {
+	// Create a file that exceeds the full-content size threshold.
+	var sb strings.Builder
+	for i := 0; i < 2000; i++ {
+		sb.WriteString(fmt.Sprintf("Line %d of filler content to exceed the threshold\n", i))
 	}
 
 	tmpDir := t.TempDir()
@@ -219,9 +243,9 @@ func TestExtractMinimalContext_LargeNonGoFile(t *testing.T) {
 	// Should be truncated
 	assert.Contains(t, result, "... (truncated)")
 
-	// Should not include all 100 lines
+	// Should not include all 2000 lines
 	lines := strings.Split(result, "\n")
-	assert.Less(t, len(lines), 100, "Should truncate large files")
+	assert.Less(t, len(lines), 2000, "Should truncate large files")
 }
 
 func TestExtractMinimalContext_InvalidGoFile(t *testing.T) {

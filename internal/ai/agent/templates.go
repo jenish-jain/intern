@@ -21,9 +21,9 @@ type PlanPromptOptions struct {
 func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoContext string, opts PlanPromptOptions) string {
 	rules := []string{
 		"Output ONLY a compact JSON array. No markdown, no backticks, no commentary.",
-		`For NEW files: {"path":"relative/path.go","operation":"create","content":"<full file content>"}`,
-		`For EXISTING files: {"path":"relative/path.go","operation":"edit","edits":[{"old":"<exact lines copied verbatim from the file, including indentation>","new":"<replacement lines>"}]}`,
-		`To delete: {"path":"relative/path.go","operation":"delete"}`,
+		`For NEW files: {"path":"relative/path.ext","operation":"create","content":"<full file content>"}`,
+		`For EXISTING files: {"path":"relative/path.ext","operation":"edit","edits":[{"old":"<exact lines copied verbatim from the file, including indentation>","new":"<replacement lines>"}]}`,
+		`To delete: {"path":"relative/path.ext","operation":"delete"}`,
 		"NEVER use operation create on a file that already exists in the repository context - use edit.",
 		"In each edit, the old block MUST be copied character-for-character from the provided file content, and MUST be unique within the file. Include 2-3 unchanged surrounding lines for uniqueness.",
 		"Keep edits minimal: change only what the ticket requires. Do not reformat or rewrite untouched code.",
@@ -31,10 +31,11 @@ func BuildPlanChangesPrompt(ticketKey, ticketSummary, ticketDescription, repoCon
 		"Fulfil every acceptance criterion in the ticket; add nothing beyond it.",
 		"Use POSIX-style relative paths under the repo root.",
 		`Files marked "(full content)" are shown verbatim and may be edited. Files marked "(signatures only)" show declarations without bodies and CANNOT be safely edited.`,
-		`Only use operation=edit on files shown with full content. If you need to modify a file shown as signatures-only, respond with ONLY {"need_files":["relative/path.go", ...]} (no array, no other keys) and nothing else - you will be given the full content and asked again.`,
+		`Only use operation=edit on files shown with full content. If you need to modify a file shown as signatures-only, respond with ONLY {"need_files":["relative/path.ext", ...]} (no array, no other keys) and nothing else - you will be given the full content and asked again.`,
+		`If a name the ticket asked for (a resource, variable, identifier, etc.) already exists for something unrelated, don't fail the ticket - pick a clear, non-colliding alternative yourself and continue. Record what you changed and why in that change's "note" field, e.g. {"path":"...","operation":"edit","edits":[...],"note":"renamed X to Y: X already exists for an unrelated resource"}. Use "note" sparingly, only for judgment calls a human should be able to review or override - not for routine changes.`,
 	}
 	return fmt.Sprintf(
-		"You are a senior Go engineer\nTicket: %s - %s\nDescription:\n%s\n\nRepository context (truncated):\n%s\n\nRules:\n- %s\n\nJSON:",
+		"You are a senior software engineer making a focused, minimal change to an existing repository (which may contain code, infrastructure-as-code, or configuration).\nTicket: %s - %s\nDescription:\n%s\n\nRepository context (truncated):\n%s\n\nRules:\n- %s\n\nJSON:",
 		strings.TrimSpace(ticketKey),
 		strings.TrimSpace(ticketSummary),
 		strings.TrimSpace(ticketDescription),

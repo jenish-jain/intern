@@ -427,10 +427,30 @@ func receiverTypeName(expr ast.Expr) string {
 	}
 }
 
+// nonGoFullContentMaxBytes is the size under which non-Go files are shown
+// in full rather than truncated to a prefix, matching this function's
+// documented (previously unimplemented) intent. Unlike Go source - where a
+// package/import/signature header is genuinely representative of the whole
+// file - declarative config files (Terraform, YAML, JSON) have no "head"
+// that's more relevant than the rest: a variable/resource block near the
+// end is exactly as load-bearing as one at the top. A blind prefix cut
+// silently hides real content from the model instead of summarizing it,
+// which is worse than useless when the model is later asked to edit that
+// file - it has no way to know that what it can't see even exists.
+const nonGoFullContentMaxBytes = 16 * 1024
+
 // extractNonGoContext extracts context from non-Go files (config, docs, etc.).
-// For small files (<10KB), it returns the full content.
-// For larger files, it returns the first 100 lines to avoid excessive context.
+// For small files (<16KB), it returns the full content. For larger files,
+// it returns the first 100 lines to avoid excessive context.
 func extractNonGoContext(filePath string) (string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+	if len(data) <= nonGoFullContentMaxBytes {
+		return fmt.Sprintf("# File: %s\n\n%s", filePath, string(data)), nil
+	}
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return "", err
@@ -440,26 +460,21 @@ func extractNonGoContext(filePath string) (string, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# File: %s\n\n", filePath))
 
-	// For non-code files, include first 50 lines or 2KB, whichever is smaller
 	scanner := bufio.NewScanner(file)
 	lineCount := 0
-	maxLines := 50
-	maxBytes := 2048
-	bytesRead := 0
+	maxLines := 100
 
-	for scanner.Scan() && lineCount < maxLines && bytesRead < maxBytes {
-		line := scanner.Text()
-		sb.WriteString(line)
+	for scanner.Scan() && lineCount < maxLines {
+		sb.WriteString(scanner.Text())
 		sb.WriteString("\n")
 		lineCount++
-		bytesRead += len(line) + 1
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		return sb.String(), err
 	}
 
-	if lineCount >= maxLines || bytesRead >= maxBytes {
+	if lineCount >= maxLines {
 		sb.WriteString("\n... (truncated)\n")
 	}
 
