@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"intern/internal/ai"
 	"intern/internal/orchestrator"
 
 	logger "github.com/jenish-jain/logger"
@@ -173,15 +174,32 @@ func (h *Handler) handleCallback(ctx context.Context, event slackevents.EventsAP
 
 	if err := h.coordinator.ProcessTicket(ctx, key, summary, ask); err != nil {
 		logger.Error("Slack: ticket processing failed", "key", key, "error", err)
-		_ = h.client.PostReply(ctx, key, fmt.Sprintf("Failed: %v", err))
+		_ = h.client.PostReply(ctx, key, fmt.Sprintf("Failed: %v%s", err, h.costSuffix(key)))
 		return
 	}
 
 	if entry, ok := h.coordinator.Journal.Find(key); ok && entry.PRURL != "" {
-		_ = h.client.PostReply(ctx, key, fmt.Sprintf("Done — opened %s", entry.PRURL))
+		_ = h.client.PostReply(ctx, key, fmt.Sprintf("Done — opened %s%s", entry.PRURL, h.costSuffix(key)))
 	} else {
-		_ = h.client.PostReply(ctx, key, "Done.")
+		_ = h.client.PostReply(ctx, key, fmt.Sprintf("Done.%s", h.costSuffix(key)))
 	}
+}
+
+// costSuffix renders a "\n\n_cost: ..._" line from the ticket's recorded
+// metrics (actual cost incurred, plus what full context would have cost if
+// smart context selection was used), or "" if no metrics were recorded yet
+// (e.g. processing failed before any AI call was made).
+func (h *Handler) costSuffix(key string) string {
+	tm, ok := h.coordinator.LastTicketMetrics(key)
+	if !ok || (tm.InputTokens == 0 && tm.OutputTokens == 0) {
+		return ""
+	}
+	actual := fmt.Sprintf("actual %s (%s in / %s out tokens)",
+		ai.FormatCost(tm.Cost), ai.FormatTokens(tm.InputTokens), ai.FormatTokens(tm.OutputTokens))
+	if tm.EstimatedFullContextCost > 0 {
+		return fmt.Sprintf("\n\n_cost: %s, estimated %s without smart context_", actual, ai.FormatCost(tm.EstimatedFullContextCost))
+	}
+	return fmt.Sprintf("\n\n_cost: %s_", actual)
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -30,19 +30,41 @@ type Coordinator struct {
 	Metrics    *Metrics
 	RepoPaths  *repository.RepositoryPath // Centralized path management
 	Journal    *journal.Journal           // Cross-ticket continuity log
+
+	ticketMetricsMu sync.Mutex
+	ticketMetrics   map[string]*TicketMetrics // last-known metrics per ticket key, for request-driven callers (see LastTicketMetrics)
 }
 
 func NewCoordinator(ticketing *ticketing.Service, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
 	return &Coordinator{
-		Ticketing:  ticketing,
-		Repository: repository,
-		Agent:      agent,
-		Cfg:        cfg,
-		State:      state,
-		Metrics:    NewMetrics(),
-		RepoPaths:  repoPaths,
-		Journal:    journal.Load(repoPaths.Root()),
+		Ticketing:     ticketing,
+		Repository:    repository,
+		Agent:         agent,
+		Cfg:           cfg,
+		State:         state,
+		Metrics:       NewMetrics(),
+		RepoPaths:     repoPaths,
+		Journal:       journal.Load(repoPaths.Root()),
+		ticketMetrics: make(map[string]*TicketMetrics),
 	}
+}
+
+// LastTicketMetrics returns the most recently recorded metrics for a ticket
+// key, if any. Populated as soon as a ticket starts processing and updated
+// in place as AI usage data becomes available, so it's readable after
+// ProcessTicket returns regardless of whether the ticket succeeded or
+// failed partway through.
+func (c *Coordinator) LastTicketMetrics(key string) (*TicketMetrics, bool) {
+	c.ticketMetricsMu.Lock()
+	defer c.ticketMetricsMu.Unlock()
+	tm, ok := c.ticketMetrics[key]
+	return tm, ok
+}
+
+func (c *Coordinator) storeTicketMetrics(key string, tm *TicketMetrics) {
+	c.ticketMetricsMu.Lock()
+	defer c.ticketMetricsMu.Unlock()
+	c.ticketMetrics[key] = tm
 }
 
 func (c *Coordinator) Run(ctx context.Context) {
@@ -258,6 +280,13 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 func (c *Coordinator) processTicket(ctx context.Context, key, summary, description string) error {
 	startTime := time.Now()
 
+	// Recorded early and updated in place (rather than replaced) as the
+	// pipeline progresses, so cost data is available via LastTicketMetrics
+	// even if a later step fails - Status only flips to "success" if the
+	// full pipeline completes.
+	ticketMetrics := &TicketMetrics{TicketKey: key, Status: "failed", Timestamp: startTime}
+	c.storeTicketMetrics(key, ticketMetrics)
+
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
 	logger.Info("Creating branch", "branch", branchName)
 	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
@@ -385,7 +414,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 
 	// Create per-ticket metrics for tracking
-	ticketMetrics := NewTicketMetricsFromUsage(key, usageMetrics)
+	ticketMetrics.ApplyUsage(usageMetrics)
 	ticketMetrics.SetRetryCount(attempts)
 
 	// Estimate savings if smart context was used
@@ -626,6 +655,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	ticketMetrics.SetExecutionTime(executionTime)
 	ticketMetrics.SetFilesChanged(filesChanged)
+	ticketMetrics.Status = "success"
 
 	c.Metrics.IncTicketsProcessed()
 	c.Metrics.AddExecutionTime(executionTime)
