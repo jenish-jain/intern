@@ -105,6 +105,24 @@ func NewTicketMetricsFromUsage(ticketKey string, usage *agent.UsageMetrics) *Tic
 	}
 }
 
+// ApplyUsage fills in the AI-usage-derived fields (tokens, cost, context
+// stats) on an existing TicketMetrics once planning succeeds, leaving
+// TicketKey/Timestamp/Status untouched - Status is set separately once the
+// full pipeline completes, since planning succeeding doesn't guarantee the
+// rest of the ticket does.
+func (tm *TicketMetrics) ApplyUsage(usage *agent.UsageMetrics) {
+	if usage == nil {
+		return
+	}
+	tm.InputTokens = usage.InputTokens
+	tm.OutputTokens = usage.OutputTokens
+	tm.Cost = usage.EstimatedCost
+	tm.ContextStrategy = usage.ContextStats.Strategy
+	tm.FilesInContext = usage.ContextStats.FilesIncluded
+	tm.ContextSizeBytes = usage.ContextStats.ContextBytes
+	tm.KeywordsExtracted = usage.ContextStats.Keywords
+}
+
 // MarkFailed marks the ticket as failed with an error message.
 func (tm *TicketMetrics) MarkFailed(err error) {
 	tm.Status = "failed"
