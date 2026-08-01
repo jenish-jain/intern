@@ -65,7 +65,7 @@ func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs
 			}
 		}
 		logger.Debug("Accepting change", "path", clean, "operation", ch.Operation)
-		out = append(out, agent.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content, Edits: ch.Edits})
+		out = append(out, agent.CodeChange{Path: clean, Operation: ch.Operation, Content: ch.Content, Edits: ch.Edits, Note: ch.Note})
 	}
 	logger.Debug("Validation complete", "accepted_changes", len(out), "rejected_changes", len(changes)-len(out))
 	if len(out) == 0 {
