@@ -1,5 +1,6 @@
 # AI Intern Agent 
 [![Go Coverage](https://github.com/jenish-jain/intern/wiki/coverage.svg)](https://raw.githack.com/wiki/jenish-jain/intern/coverage.html)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jenish-jain/intern)
 
 An autonomous Go-based engineering assistant that reads JIRA tickets assigned to it, analyzes the target repository, generates and applies code changes using an AI provider (Anthropic Claude or local LLMs via Ollama), opens a GitHub Pull Request, and updates the JIRA ticket status.
 
