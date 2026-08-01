@@ -85,6 +85,21 @@ func (j *Journal) Reconcile(ctx context.Context, checkMerged func(ctx context.Co
 	return updated, nil
 }
 
+// Find returns the most recent entry for a ticket key, if one exists.
+// Used by request-driven callers (e.g. the Slack handler) that need the
+// PR URL for a ticket after ProcessTicket returns, since the ticketing.Client
+// UpdateTicketStatus callback only carries the status string, not the PR URL.
+func (j *Journal) Find(ticketKey string) (Entry, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for i := len(j.Entries) - 1; i >= 0; i-- {
+		if j.Entries[i].TicketKey == ticketKey {
+			return j.Entries[i], true
+		}
+	}
+	return Entry{}, false
+}
+
 // saveLocked performs an atomic write of the journal file (temp file +
 // rename, mirroring State.saveUnlocked). Must be called with j.mu held.
 func (j *Journal) saveLocked() error {

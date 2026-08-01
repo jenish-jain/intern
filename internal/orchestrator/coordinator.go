@@ -209,6 +209,26 @@ func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
 	}
 }
 
+// PrepareRepository clones/syncs the target repository. Exported for
+// request-driven callers (e.g. the Slack webhook handler) that process a
+// single ticket outside of Run()'s polling loop and need to ensure the repo
+// is ready before ProcessTicket runs.
+func (c *Coordinator) PrepareRepository(ctx context.Context) error {
+	return c.prepareRepository(ctx)
+}
+
+// ProcessTicket runs the full ticket pipeline (branch, plan, apply, quality
+// gates, push, PR, status update) for a single ticket. Exported so request-
+// driven trigger sources (Slack webhook, Cloud Run handler) can invoke it
+// directly for one ticket without going through Run()'s JIRA polling loop.
+func (c *Coordinator) ProcessTicket(ctx context.Context, key, summary, description string) error {
+	if err := c.processTicket(ctx, key, summary, description); err != nil {
+		return err
+	}
+	c.State.MarkProcessed(key)
+	return nil
+}
+
 func (c *Coordinator) prepareRepository(ctx context.Context) error {
 	repoPath := c.RepoPaths.Root()
 	if _, err := os.Stat(c.RepoPaths.GitDir()); os.IsNotExist(err) {
