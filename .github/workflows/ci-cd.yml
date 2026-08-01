@@ -22,10 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only run on pull_request: master already passed these checks before
+      # merge, so re-running on push here would just cost time for no signal.
       - name: Run vet
+        if: github.event_name == 'pull_request'
         run: make vet
 
       - name: Run tests
+        if: github.event_name == 'pull_request'
         run: make test
 
       - name: Update coverage report
