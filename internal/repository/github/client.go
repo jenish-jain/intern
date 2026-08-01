@@ -219,6 +219,15 @@ func (c *githubClient) Push(ctx context.Context, branchName string) error {
 	if err != nil && err != git.NoErrAlreadyUpToDate {
 		return fmt.Errorf("failed to push to remote: %w", err)
 	}
+
+	// go-git can report success (including NoErrAlreadyUpToDate) against a
+	// working directory reused across runs on a warm instance without the
+	// branch actually landing on the remote — confirm it did, since a
+	// silent no-op here otherwise surfaces later as a confusing "invalid
+	// head" error from PR creation instead of a clear push failure.
+	if _, _, err := c.ghClient.Git.GetRef(ctx, c.owner, c.repo, fmt.Sprintf("refs/heads/%s", branchName)); err != nil {
+		return fmt.Errorf("push reported success but branch %s not found on remote: %w", branchName, err)
+	}
 	return nil
 }
 

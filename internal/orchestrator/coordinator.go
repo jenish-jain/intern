@@ -571,8 +571,12 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		return nil // Exit early without creating PR
 	}
 
-	if err := c.Repository.Push(ctx, branchName); err != nil {
-		return fmt.Errorf("push: %w", err)
+	pushErr, pushAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+		return MakeTransient(c.Repository.Push(ctx, branchName))
+	})
+	c.Metrics.AddRetries(pushAttempts)
+	if pushErr != nil {
+		return fmt.Errorf("push: %w", pushErr)
 	}
 	base := c.Cfg.BaseBranch
 	if base == "" {
