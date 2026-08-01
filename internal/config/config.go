@@ -173,6 +173,7 @@ func LoadConfig() (*Config, error) {
 		cfg.MetricsPort = 9090 // Default Prometheus port
 	}
 	// MetricsEnabled defaults to false (opt-in)
+	// "*" disables the allowlist check entirely — see validatePlannedChanges.
 	allowed := viper.GetString("ALLOWED_WRITE_DIRS")
 	if strings.TrimSpace(allowed) == "" {
 		cfg.AllowedWriteDirs = []string{"internal", "cmd", "pkg", "docs", "config", "."}

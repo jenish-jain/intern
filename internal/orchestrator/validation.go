@@ -39,12 +39,15 @@ func validatePlannedChanges(root string, changes []agent.CodeChange, allowedDirs
 			logger.Warn("Rejecting attempt to modify Go dependency file", "path", clean)
 			continue
 		}
-		// Enforce allowlist
-		first := firstSegment(clean)
-		// Allow root-level files if "." is in allowedDirs
-		if !inList(first, allowedDirs) && !(first == clean && inList(".", allowedDirs)) {
-			logger.Debug("Skipping path not in allowed directories", "path", clean, "first_segment", first, "allowed_dirs", allowedDirs)
-			continue
+		// Enforce allowlist, unless "*" opts out of it entirely (needed since
+		// target repos vary in directory layout and a fixed list doesn't generalize).
+		if !inList("*", allowedDirs) {
+			first := firstSegment(clean)
+			// Allow root-level files if "." is in allowedDirs
+			if !inList(first, allowedDirs) && !(first == clean && inList(".", allowedDirs)) {
+				logger.Debug("Skipping path not in allowed directories", "path", clean, "first_segment", first, "allowed_dirs", allowedDirs)
+				continue
+			}
 		}
 		// Ensure a payload is present: create needs content, edit needs hunks,
 		// delete needs neither.
