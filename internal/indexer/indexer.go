@@ -117,6 +117,16 @@ func (idx *Indexer) shouldSkipDir(relPath string) bool {
 func (idx *Indexer) shouldSkipFile(relPath string) bool {
 	lower := strings.ToLower(relPath)
 
+	// Skip files inside excluded directories — needed because the incremental
+	// updater (UpdateIndex) checks files individually via git diff rather than
+	// walking the tree with shouldSkipDir, so e.g. .ai-intern/file_index.json
+	// would otherwise get indexed as a regular changed file.
+	for _, excluded := range excludedDirs {
+		if lower == excluded || strings.HasPrefix(lower, excluded+"/") {
+			return true
+		}
+	}
+
 	// Skip binary and media files
 	for _, ext := range binaryExts {
 		if strings.HasSuffix(lower, ext) {
