@@ -29,16 +29,22 @@ type CodeChange struct {
 	Note string `json:"note,omitempty"`
 }
 
-// ParseNeedFiles checks whether raw is a {"need_files":["path", ...]}
-// retrieval request rather than a changes array. The model emits this when
-// it needs to edit a file that was shown signatures-only (see
-// BuildPlanChangesPrompt). Returns nil if raw is not such a request.
+// ParseNeedFiles checks whether raw is a retrieval request rather than a
+// changes array: either the instructed {"need_files":["path", ...]} form,
+// or a bare ["path", ...] array of strings, which models sometimes emit
+// instead despite the prompt. The model emits this when it needs to edit a
+// file that wasn't shown with full content (see BuildPlanChangesPrompt).
+// Returns nil if raw is not such a request.
 func ParseNeedFiles(raw string) []string {
 	var req struct {
 		NeedFiles []string `json:"need_files"`
 	}
-	if err := json.Unmarshal([]byte(raw), &req); err != nil {
-		return nil
+	if err := json.Unmarshal([]byte(raw), &req); err == nil && len(req.NeedFiles) > 0 {
+		return req.NeedFiles
 	}
-	return req.NeedFiles
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err == nil && len(paths) > 0 {
+		return paths
+	}
+	return nil
 }
