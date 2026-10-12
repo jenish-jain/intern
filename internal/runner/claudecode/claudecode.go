@@ -46,7 +46,7 @@ var schemas = map[runner.Role]string{
 }
 
 // editTools change the workspace; reviewers don't get them.
-var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(git add:*)", "Bash(git commit:*)"}
+var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(git add:*)", "Bash(git commit:*)", "Bash(git merge:*)"}
 
 // readOnlyTools are always allowed when the sandbox is not isolated.
 // Roles that edit also get editTools.

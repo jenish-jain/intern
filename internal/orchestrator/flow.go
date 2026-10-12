@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,8 +43,9 @@ type Flow struct {
 	Stage        Stage     `json:"stage"`
 	ReviewRounds int       `json:"review_rounds"`
 	FixRounds    int       `json:"fix_rounds"`
-	Feedback     string    `json:"feedback,omitempty"` // input for the next developer round
-	Reason       string    `json:"reason,omitempty"`   // why a human is needed
+	MergeErrors  int       `json:"merge_errors,omitempty"` // consecutive unexplained merge failures
+	Feedback     string    `json:"feedback,omitempty"`     // input for the next developer round
+	Reason       string    `json:"reason,omitempty"`       // why a human is needed
 	CostUSD      float64   `json:"cost_usd"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -167,6 +169,11 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 		return c.runDeveloperFix(ctx, f)
 	case StageTest:
 		return c.runTest(ctx, f)
+	case StageMerge:
+		if c.Cfg.AutoMerge {
+			return c.runMerge(ctx, f, pr)
+		}
+		return nil // waiting for a human to merge
 	case StageNeedsHuman:
 		if pr.HasLabel(LabelResume) {
 			_ = c.Repository.RemoveLabel(ctx, f.PRURL, LabelResume)
@@ -404,4 +411,47 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 	f.Feedback = fb.String()
 	c.moveFlow(ctx, f, StageChangesRequested)
 	return nil
+}
+
+// maxMergeErrors is how many consecutive unexplained merge failures are
+// retried before a human is asked to look.
+const maxMergeErrors = 3
+
+// runMerge merges a ready PR once CI allows it. Failing CI and conflicts
+// go back to the developer; other merge errors are retried, then escalated.
+func (c *Coordinator) runMerge(ctx context.Context, f *Flow, pr repository.PRState) error {
+	switch pr.Checks {
+	case repository.ChecksPending:
+		return nil // wait for CI
+	case repository.ChecksFailure:
+		f.Feedback = "CI failed on this pull request. Find the cause, fix it, and make sure verify passes.\n\nFailing checks:\n- " +
+			strings.Join(pr.FailedChecks, "\n- ")
+		c.moveFlow(ctx, f, StageChangesRequested)
+		return nil
+	}
+
+	err := c.Repository.MergePR(ctx, f.PRURL, c.Cfg.MergeMethod)
+	switch {
+	case err == nil:
+		logger.Info("Merged PR", "ticket", f.TicketKey, "pr", f.PRURL, "flow_cost", f.CostUSD)
+		if cerr := c.Repository.CommentPR(ctx, f.PRURL, fmt.Sprintf("**intern: merged** after %d review and %d fix rounds. Total model cost for this ticket: $%.2f.", f.ReviewRounds, f.FixRounds, f.CostUSD)); cerr != nil {
+			logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", cerr)
+		}
+		// reconcileMerged moves the ticket to Done on the next cycle.
+		c.State.DeleteFlow(f.TicketKey)
+		return nil
+	case errors.Is(err, repository.ErrMergeConflict):
+		f.MergeErrors = 0
+		f.Feedback = fmt.Sprintf("This pull request conflicts with %[1]s. Merge the local %[1]s branch into this branch (`git merge %[1]s`), resolve every conflict so both sides' intent is kept, and make sure verify passes.", c.baseBranch())
+		c.moveFlow(ctx, f, StageChangesRequested)
+		return nil
+	default:
+		f.MergeErrors++
+		if f.MergeErrors >= maxMergeErrors {
+			c.escalate(ctx, f, "merging keeps failing: "+truncateNotes(err.Error(), 300))
+			return nil
+		}
+		c.State.SaveFlow(*f)
+		return err
+	}
 }

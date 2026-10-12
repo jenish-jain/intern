@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ type flowRepo struct {
 	comments []string
 	pushes   []string
 	merges   []string
+	mergeErr error
 }
 
 func (r *flowRepo) git(args ...string) error {
@@ -82,6 +85,9 @@ func (r *flowRepo) RemoveLabel(_ context.Context, _, label string) error {
 func (r *flowRepo) MergePR(_ context.Context, url, method string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.mergeErr != nil {
+		return r.mergeErr
+	}
 	r.merges = append(r.merges, method)
 	r.pr.Merged = true
 	return nil
@@ -383,5 +389,70 @@ func TestFlow_TesterTouchingAppCodeEscalates(t *testing.T) {
 	}
 	if out, _ := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:app.txt").Output(); string(out) != "v1\n" {
 		t.Errorf("app code changed on branch: %q", out)
+	}
+}
+
+func TestFlow_AutoMergeWaitsForCIThenMerges(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true, MergeMethod: "squash"}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0.5)
+	if fl := c.State.ListFlows(); fl[0].Stage != StageMerge {
+		t.Fatalf("auto-merge only: first stage = %s", fl[0].Stage)
+	}
+
+	repo.pr.Checks = repository.ChecksPending
+	c.advanceFlows(ctx)
+	if len(repo.merges) != 0 {
+		t.Fatal("merged while CI pending")
+	}
+
+	repo.pr.Checks = repository.ChecksSuccess
+	c.advanceFlows(ctx)
+	if len(repo.merges) != 1 || repo.merges[0] != "squash" {
+		t.Fatalf("merges = %v", repo.merges)
+	}
+	if len(c.State.ListFlows()) != 0 {
+		t.Error("merged flow should end")
+	}
+	if !strings.Contains(repo.comments[len(repo.comments)-1], "$0.50") {
+		t.Errorf("merge comment should report cost: %q", repo.comments)
+	}
+}
+
+func TestFlow_AutoMergeFailingCIGoesToDeveloper(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	repo.pr.Checks = repository.ChecksFailure
+	repo.pr.FailedChecks = []string{"test (failure): https://gh/run/1"}
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "https://gh/run/1") {
+		t.Fatalf("got %+v", f)
+	}
+}
+
+func TestFlow_AutoMergeConflictAndErrors(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	repo.pr.Checks = repository.ChecksNone
+
+	repo.mergeErr = fmt.Errorf("merge PR #7: %w", repository.ErrMergeConflict)
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "git merge master") {
+		t.Fatalf("conflict should go to developer: %+v", f)
+	}
+
+	f.Stage, f.Feedback = StageMerge, ""
+	c.State.SaveFlow(f)
+	repo.mergeErr = errors.New("502 bad gateway")
+	for i := 0; i < maxMergeErrors; i++ {
+		c.advanceFlows(ctx)
+	}
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageNeedsHuman || !strings.Contains(f.Reason, "502") {
+		t.Fatalf("repeated merge errors should escalate: %+v", f)
 	}
 }

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,7 @@ type fakeGitHub struct {
 	status   string // combined status state ("" = no statuses)
 	runs     string // JSON array of check runs
 	reviewOK bool   // accept inline review comments
+	conflict bool   // PR is not mergeable
 }
 
 func (f *fakeGitHub) handler(w http.ResponseWriter, r *http.Request) {
@@ -44,14 +46,22 @@ func (f *fakeGitHub) handler(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/api/v3")
 	switch {
 	case r.Method == "GET" && p == "/repos/o/r/pulls/7":
-		_, _ = io.WriteString(w, `{"number":7,"state":"open","merged":false,"html_url":"https://github.com/o/r/pull/7",
+		mergeable := `"mergeable":true,"mergeable_state":"clean"`
+		if f.conflict {
+			mergeable = `"mergeable":false,"mergeable_state":"dirty"`
+		}
+		_, _ = io.WriteString(w, `{"number":7,"state":"open","merged":false,"html_url":"https://github.com/o/r/pull/7",`+mergeable+`,
 			"head":{"ref":"feature/P-1","sha":"abc123"},"labels":[{"name":"intern:review"}]}`)
 	case r.Method == "GET" && p == "/repos/o/r/commits/abc123/status":
 		total := 0
 		if f.status != "" {
 			total = 1
 		}
-		_, _ = io.WriteString(w, `{"state":"`+f.status+`","total_count":`+string(rune('0'+total))+`}`)
+		statuses := "[]"
+		if f.status == "error" {
+			statuses = `[{"state":"error","context":"ci/build","target_url":"https://ci/1"}]`
+		}
+		_, _ = io.WriteString(w, `{"state":"`+f.status+`","total_count":`+string(rune('0'+total))+`,"statuses":`+statuses+`}`)
 	case r.Method == "GET" && p == "/repos/o/r/commits/abc123/check-runs":
 		runs := f.runs
 		if runs == "" {
@@ -116,7 +126,7 @@ func TestGetPR_CheckStates(t *testing.T) {
 		{"no CI", "", "", repository.ChecksNone},
 		{"status success", "success", "", repository.ChecksSuccess},
 		{"run in progress", "", `[{"status":"in_progress"}]`, repository.ChecksPending},
-		{"run failed", "success", `[{"status":"completed","conclusion":"failure"}]`, repository.ChecksFailure},
+		{"run failed", "success", `[{"status":"completed","conclusion":"failure","name":"test","html_url":"https://gh/run/1"}]`, repository.ChecksFailure},
 		{"skipped counts as ok", "", `[{"status":"completed","conclusion":"skipped"},{"status":"completed","conclusion":"success"}]`, repository.ChecksSuccess},
 		{"status error", "error", "", repository.ChecksFailure},
 	}
@@ -235,5 +245,29 @@ func TestFetchBranch_FromLocalRemote(t *testing.T) {
 	}
 	if got := run(clone, "rev-parse", "refs/heads/feature/P-1"); got != want {
 		t.Errorf("local branch at %s, want %s", got, want)
+	}
+}
+
+func TestGetPR_NamesFailedChecks(t *testing.T) {
+	c := newFakeClient(t, &fakeGitHub{status: "error", runs: `[{"status":"completed","conclusion":"failure","name":"test","html_url":"https://gh/run/1"}]`})
+	st, err := c.GetPR(context.Background(), prURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(st.FailedChecks, " | ")
+	if !strings.Contains(got, "ci/build: https://ci/1") || !strings.Contains(got, "test (failure): https://gh/run/1") {
+		t.Errorf("failed checks = %q", got)
+	}
+}
+
+func TestMergePR_Conflict(t *testing.T) {
+	f := &fakeGitHub{conflict: true}
+	c := newFakeClient(t, f)
+	err := c.MergePR(context.Background(), prURL, "squash")
+	if !errors.Is(err, repository.ErrMergeConflict) {
+		t.Fatalf("expected ErrMergeConflict, got %v", err)
+	}
+	if len(f.find("PUT", "/pulls/7/merge")) != 0 {
+		t.Error("should not attempt a merge GitHub already reports as conflicting")
 	}
 }

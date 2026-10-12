@@ -22,8 +22,8 @@ type githubClient struct {
 	ghClient *gh.Client
 	owner    string
 	repo     string
-	token    string // Store the token for git operations
-	repoURL  string // Optional: override repository URL for testing
+	token    string                     // Store the token for git operations
+	repoURL  string                     // Optional: override repository URL for testing
 	paths    *repository.RepositoryPath // Centralized path management
 }
 

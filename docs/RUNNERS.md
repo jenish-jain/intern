@@ -38,7 +38,11 @@ With `REVIEW_ENABLED=true`, each PR the developer opens becomes a flow. Every po
 1. **Review.** The reviewer reads the diff against the base branch, runs verify, and posts a review on the PR. Approval moves the flow on. A request for changes sends the comments to the developer.
 2. **Changes requested.** The developer addresses the comments on the PR branch. Intern gates, commits, verifies, pushes, comments a summary, and returns the PR to review.
 3. **Testing** (`TEST_ENABLED=true`). After approval, the tester writes acceptance tests from the ticket's criteria and runs them with the verify commands. The gate rejects any change outside test paths (`test_paths` in `.intern/project.yaml`, or common defaults such as `*_test.go`, `tests/`, `*.spec.ts`). New tests are committed and pushed either way. Failures go back to the developer, whose fix returns the PR to review.
-4. **Ready to merge.** The PR waits with the `intern:ready-to-merge` label. With `AUTO_MERGE=true` intern merges it once CI is green; otherwise a human merges.
+4. **Ready to merge.** The PR waits with the `intern:ready-to-merge` label. Without `AUTO_MERGE` a human merges it: this is the per-PR human gate. With `AUTO_MERGE=true` intern merges with `MERGE_METHOD` (default `squash`) once CI allows:
+   - CI pending: wait.
+   - CI failed: the failing check names and links go to the developer.
+   - Merge conflict: the developer is asked to merge the base branch and resolve it.
+   - Any other merge error is retried, then escalated after three failures in a row.
 5. **Needs human.** After `MAX_REVIEW_ROUNDS` rejected reviews, twice that many developer fix rounds, a tester change outside test paths, or when a persona has questions, intern comments on the PR and the ticket and waits. Push fixes or answer in the PR, then add the `intern:resume` label to restart review with a fresh round budget.
 
 The current stage is visible as an `intern:<stage>` label on the PR. Merged or closed PRs drop out of the flow; merged ones move their ticket to Done.

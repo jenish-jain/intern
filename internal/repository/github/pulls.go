@@ -87,34 +87,41 @@ func (c *githubClient) GetPR(ctx context.Context, prURL string) (repository.PRSt
 		st.Labels = append(st.Labels, l.GetName())
 	}
 	if st.HeadSHA != "" && !st.Merged {
-		if st.Checks, err = c.checkState(ctx, st.HeadSHA); err != nil {
+		if st.Checks, st.FailedChecks, err = c.checkState(ctx, st.HeadSHA); err != nil {
 			return st, err
 		}
 	}
 	return st, nil
 }
 
-// checkState combines commit statuses and check runs for sha.
-func (c *githubClient) checkState(ctx context.Context, sha string) (repository.CheckState, error) {
-	pending, failed, seen := false, false, false
+// checkState combines commit statuses and check runs for sha, and names
+// the ones that failed.
+func (c *githubClient) checkState(ctx context.Context, sha string) (repository.CheckState, []string, error) {
+	pending, seen := false, false
+	var failed []string
 
 	combined, _, err := c.ghClient.Repositories.GetCombinedStatus(ctx, c.owner, c.repo, sha, nil)
 	if err != nil {
-		return "", fmt.Errorf("get commit status: %w", err)
+		return "", nil, fmt.Errorf("get commit status: %w", err)
 	}
 	if combined.GetTotalCount() > 0 {
 		seen = true
-		switch combined.GetState() {
-		case "pending":
+		if combined.GetState() == "pending" {
 			pending = true
-		case "failure", "error":
-			failed = true
+		}
+		for _, st := range combined.Statuses {
+			if s := st.GetState(); s == "failure" || s == "error" {
+				failed = append(failed, describeCheck(st.GetContext(), st.GetTargetURL()))
+			}
+		}
+		if s := combined.GetState(); (s == "failure" || s == "error") && len(failed) == 0 {
+			failed = append(failed, "commit status "+s)
 		}
 	}
 
 	runs, _, err := c.ghClient.Checks.ListCheckRunsForRef(ctx, c.owner, c.repo, sha, &gh.ListCheckRunsOptions{ListOptions: gh.ListOptions{PerPage: 100}})
 	if err != nil {
-		return "", fmt.Errorf("list check runs: %w", err)
+		return "", nil, fmt.Errorf("list check runs: %w", err)
 	}
 	for _, run := range runs.CheckRuns {
 		seen = true
@@ -125,20 +132,27 @@ func (c *githubClient) checkState(ctx context.Context, sha string) (repository.C
 		switch run.GetConclusion() {
 		case "success", "neutral", "skipped":
 		default:
-			failed = true
+			failed = append(failed, describeCheck(run.GetName()+" ("+run.GetConclusion()+")", run.GetHTMLURL()))
 		}
 	}
 
 	switch {
-	case failed:
-		return repository.ChecksFailure, nil
+	case len(failed) > 0:
+		return repository.ChecksFailure, failed, nil
 	case pending:
-		return repository.ChecksPending, nil
+		return repository.ChecksPending, nil, nil
 	case seen:
-		return repository.ChecksSuccess, nil
+		return repository.ChecksSuccess, nil, nil
 	default:
-		return repository.ChecksNone, nil
+		return repository.ChecksNone, nil, nil
 	}
+}
+
+func describeCheck(name, url string) string {
+	if url == "" {
+		return name
+	}
+	return name + ": " + url
 }
 
 func (c *githubClient) CommentPR(ctx context.Context, prURL, body string) error {
@@ -221,8 +235,16 @@ func (c *githubClient) MergePR(ctx context.Context, prURL, method string) error 
 		return fmt.Errorf("get PR #%d: %w", num, err)
 	}
 	opts := &gh.PullRequestOptions{MergeMethod: method, SHA: pr.GetHead().GetSHA()}
-	res, _, err := c.ghClient.PullRequests.Merge(ctx, c.owner, c.repo, num, "", opts)
+	if pr.Mergeable != nil && !pr.GetMergeable() {
+		return fmt.Errorf("merge PR #%d: %w", num, repository.ErrMergeConflict)
+	}
+	res, resp, err := c.ghClient.PullRequests.Merge(ctx, c.owner, c.repo, num, "", opts)
 	if err != nil {
+		// 405 means GitHub won't merge it as-is; with a dirty mergeable
+		// state that's a conflict the developer has to resolve.
+		if resp != nil && resp.StatusCode == 405 && pr.GetMergeableState() == "dirty" {
+			return fmt.Errorf("merge PR #%d: %w", num, repository.ErrMergeConflict)
+		}
 		return fmt.Errorf("merge PR #%d: %w", num, err)
 	}
 	if !res.GetMerged() {

@@ -90,7 +90,10 @@ type PRState struct {
 	Merged     bool
 	Closed     bool
 	Checks     CheckState
-	Labels     []string
+	// FailedChecks names the failing statuses and check runs, with links
+	// where GitHub provides them.
+	FailedChecks []string
+	Labels       []string
 }
 
 // HasLabel reports whether the PR carries label.
@@ -125,9 +128,13 @@ type PullRequests interface {
 	AddLabels(ctx context.Context, prURL string, labels ...string) error
 	RemoveLabel(ctx context.Context, prURL, label string) error
 	// MergePR merges with method "merge", "squash" or "rebase" and
-	// deletes the head branch.
+	// deletes the head branch. It returns ErrMergeConflict when the PR
+	// can't merge cleanly.
 	MergePR(ctx context.Context, prURL, method string) error
 }
+
+// ErrMergeConflict means the PR can't merge cleanly into its base.
+var ErrMergeConflict = errors.New("pull request has merge conflicts")
 
 // ErrUnsupported is returned when the backend lacks an optional capability.
 var ErrUnsupported = errors.New("operation not supported by repository backend")
