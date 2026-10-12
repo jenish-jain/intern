@@ -22,24 +22,25 @@ func NewMetricsServer(metrics *Metrics, port int) *MetricsServer {
 		port = 9090 // Default Prometheus port
 	}
 
-	return &MetricsServer{
+	ms := &MetricsServer{
 		metrics: metrics,
 		port:    port,
 	}
-}
-
-// Start starts the HTTP metrics server
-func (ms *MetricsServer) Start(ctx context.Context) error {
+	// Built here rather than in Start so Stop, which may run on another
+	// goroutine, never races with Start assigning the field.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", ms.handleMetrics)
 	mux.HandleFunc("/health", ms.handleHealth)
 	mux.HandleFunc("/", ms.handleDashboard)
-
 	ms.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", ms.port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
+	return ms
+}
 
+// Start starts the HTTP metrics server
+func (ms *MetricsServer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

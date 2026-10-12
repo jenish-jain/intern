@@ -29,9 +29,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: make vet
 
-      - name: Run tests
+      - name: Run tests (race detector)
         if: github.event_name == 'pull_request'
-        run: make test
+        run: make test-race
 
       - name: Update coverage report
         uses: ncruces/go-coverage-report@v0
