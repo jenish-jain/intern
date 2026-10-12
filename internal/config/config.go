@@ -69,6 +69,25 @@ type Config struct {
 	SelfHealOnVet       bool // Retry on vet failures
 	SelfHealOnBuild     bool // Retry on build failures
 
+	// AIRunner selects the engine that does a ticket's work: "legacy"
+	// (single-shot JSON edits via AI_PROVIDER) or "claude-code" (agentic
+	// Claude Code CLI).
+	AIRunner string
+	// Claude Code runner settings.
+	ClaudeBinary string // CLI path (default "claude")
+	ClaudeModel  string // --model, e.g. "opus" (default: CLI default)
+	ClaudeEffort string // --effort (default: CLI default)
+	// RunnerTimeout bounds one runner job, e.g. "45m".
+	RunnerTimeout string
+	// RunnerAllowedCommands are Bash command prefixes the agent may run
+	// when the sandbox is local (ignored for docker, which is isolated).
+	RunnerAllowedCommands []string
+	// Sandbox is where the runner process executes: "local" or "docker".
+	Sandbox        string
+	SandboxImage   string   // image for SANDBOX=docker
+	SandboxNetwork string   // docker --network (default "bridge")
+	SandboxPassEnv []string // extra host env vars passed to a local sandbox
+
 	// VerifyFixAttempts is how many times a failing verify is handed back
 	// to the runner to fix. Defaults to SELF_HEAL_MAX_ATTEMPTS when
 	// SELF_HEAL_ENABLED is set, otherwise 0.
@@ -142,6 +161,17 @@ func LoadConfig() (*Config, error) {
 		SelfHealOnVet:       viper.GetBool("SELF_HEAL_ON_VET"),
 		SelfHealOnBuild:     viper.GetBool("SELF_HEAL_ON_BUILD"),
 
+		AIRunner:              viper.GetString("AI_RUNNER"),
+		ClaudeBinary:          viper.GetString("CLAUDE_CODE_BIN"),
+		ClaudeModel:           viper.GetString("CLAUDE_MODEL"),
+		ClaudeEffort:          viper.GetString("CLAUDE_EFFORT"),
+		RunnerTimeout:         viper.GetString("RUNNER_TIMEOUT"),
+		RunnerAllowedCommands: splitList(viper.GetString("RUNNER_ALLOWED_COMMANDS")),
+		Sandbox:               viper.GetString("SANDBOX"),
+		SandboxImage:          viper.GetString("SANDBOX_IMAGE"),
+		SandboxNetwork:        viper.GetString("SANDBOX_NETWORK"),
+		SandboxPassEnv:        splitList(viper.GetString("SANDBOX_PASS_ENV")),
+
 		VerifyFixAttempts: viper.GetInt("VERIFY_FIX_ATTEMPTS"),
 		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),
 
@@ -176,6 +206,15 @@ func LoadConfig() (*Config, error) {
 	// ContextCacheEnabled defaults to false (opt-in)
 	if cfg.PlanMaxFiles <= 0 {
 		cfg.PlanMaxFiles = 20
+	}
+	if cfg.AIRunner == "" {
+		cfg.AIRunner = "legacy"
+	}
+	if cfg.Sandbox == "" {
+		cfg.Sandbox = "local"
+	}
+	if cfg.RunnerAllowedCommands == nil {
+		cfg.RunnerAllowedCommands = defaultRunnerAllowedCommands
 	}
 	if cfg.MaxTicketAttempts <= 0 {
 		cfg.MaxTicketAttempts = 3
@@ -278,6 +317,27 @@ func (c *Config) Validate() error {
 	default:
 		return errors.NewConfigInvalidError("AI_PROVIDER", c.AIProvider,
 			"supported values: anthropic, ollama")
+	}
+
+	switch c.AIRunner {
+	case "", "legacy":
+	case "claude-code":
+		if c.RunnerTimeout != "" {
+			if _, err := time.ParseDuration(c.RunnerTimeout); err != nil {
+				return errors.NewConfigInvalidError("RUNNER_TIMEOUT", c.RunnerTimeout, "must be a duration like 45m")
+			}
+		}
+		switch c.Sandbox {
+		case "", "local":
+		case "docker":
+			if c.SandboxImage == "" {
+				return errors.NewConfigMissingError("SANDBOX_IMAGE")
+			}
+		default:
+			return errors.NewConfigInvalidError("SANDBOX", c.Sandbox, "supported values: local, docker")
+		}
+	default:
+		return errors.NewConfigInvalidError("AI_RUNNER", c.AIRunner, "supported values: legacy, claude-code")
 	}
 
 	// Validate concurrent tickets
@@ -392,4 +452,28 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// defaultRunnerAllowedCommands are the Bash prefixes a local-sandbox
+// agent may run: build and test tooling for common stacks, nothing that
+// touches remotes or deletes outside the repo.
+var defaultRunnerAllowedCommands = []string{
+	"go build", "go test", "go vet", "go mod", "go run", "go generate", "gofmt",
+	"npm", "npx", "pnpm", "yarn", "node",
+	"python -m pytest", "pytest", "pip install",
+	"make", "mkdir", "touch", "mv", "cp",
+}
+
+// splitList parses a comma-separated env value; empty input returns nil.
+func splitList(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

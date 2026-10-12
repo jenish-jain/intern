@@ -20,6 +20,15 @@ FROM golang:1.23-alpine
 
 RUN apk add --no-cache ca-certificates git
 
+# Claude Code CLI for AI_RUNNER=claude-code with SANDBOX=local. Cloud Run
+# can't run Docker, so on Cloud Run the agent runs in this container with
+# a scrubbed environment (see internal/sandbox).
+ARG CLAUDE_CODE_VERSION=latest
+RUN apk add --no-cache nodejs npm \
+ && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && rm -rf /root/.npm
+ENV DISABLE_AUTOUPDATER=1
+
 WORKDIR /app
 COPY --from=build /out/agent /app/agent
 

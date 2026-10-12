@@ -51,6 +51,13 @@ AI_PROVIDER="anthropic"
 ANTHROPIC_API_KEY="your-anthropic-api-key"
 ANTHROPIC_MODEL=""  # optional; defaults to claude-opus-4-5-20251101
 
+# Runner: "legacy" or "claude-code" (see docs/RUNNERS.md)
+AI_RUNNER="legacy"
+SANDBOX="local"          # or "docker" with SANDBOX_IMAGE
+CLAUDE_MODEL=""          # e.g. "opus"; empty uses the CLI default
+TICKET_BUDGET_USD=5
+VERIFY_FIX_ATTEMPTS=2
+
 # Ollama Configuration (required if AI_PROVIDER=ollama)
 # Make sure Ollama is running locally: https://ollama.ai
 OLLAMA_BASE_URL="http://localhost:11434"

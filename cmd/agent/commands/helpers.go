@@ -116,6 +116,15 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 
 	// Create coordinator
 	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state, repoPaths)
+	r, err := provider.NewRunner(cfg)
+	if err != nil {
+		logger.Error("Failed to initialize runner", "error", err)
+		return nil, err
+	}
+	if r != nil {
+		coordinator.Runner = r
+	}
+	logger.Info("Initialized runner", "runner", cfg.AIRunner, "sandbox", cfg.Sandbox)
 
 	return &Dependencies{
 		Config:       cfg,
