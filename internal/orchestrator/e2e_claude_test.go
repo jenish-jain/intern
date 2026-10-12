@@ -149,3 +149,48 @@ func TestE2E_ClaudeCodeReviewerAndTester(t *testing.T) {
 		t.Errorf("tester should report the acceptance criteria failing")
 	}
 }
+
+// TestE2E_ClaudeCodeArchitect runs the real architect persona through a
+// planning conversation and checks it produces an approvable backlog.
+func TestE2E_ClaudeCodeArchitect(t *testing.T) {
+	if os.Getenv("INTERN_E2E_CLAUDE") != "1" {
+		t.Skip("set INTERN_E2E_CLAUDE=1 to run against the real Claude Code CLI")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude CLI not installed")
+	}
+	model := os.Getenv("INTERN_E2E_MODEL")
+	if model == "" {
+		model = "haiku"
+	}
+	r := claudecode.New(claudecode.Config{Model: model, APIKey: os.Getenv("ANTHROPIC_API_KEY"), DefaultBudgetUSD: 2.0, Timeout: 15 * time.Minute})
+	c, repo, ft := newFlowFixture(t, &config.Config{JiraProject: "P", JiraAgentAccountID: "acct"}, &roleRunner{})
+	c.Runner = r
+
+	prd := "Build a command-line todo app in Go. Users can add a todo, list todos, and mark one done. " +
+		"Todos persist in a JSON file in the user's home directory. No sync, no accounts. " +
+		"Decide everything else yourself and do not ask questions; produce the full plan and backlog now."
+	reply, err := c.Converse(context.Background(), "E2E-1", prd)
+	t.Logf("reply:\n%s", reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, _ := c.State.GetConversation("E2E-1")
+	t.Logf("stage=%s cost=$%.4f pushes=%v", conv.Stage, conv.CostUSD, repo.pushes)
+	if conv.Stage != ConvAwaitingApproval {
+		t.Fatalf("expected an approvable backlog, got stage %s", conv.Stage)
+	}
+	for _, f := range []string{"docs/PRD.md", "docs/architecture.md", ".intern/project.yaml", ".intern/backlog.yaml"} {
+		if out, err := exec.Command("git", "-C", repo.dir, "show", conv.Branch+":"+f).Output(); err != nil || len(out) == 0 {
+			t.Errorf("plan branch missing %s", f)
+		}
+	}
+	reply, err = c.Converse(context.Background(), "E2E-1", "approve")
+	t.Logf("approve reply:\n%s", reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ft.created) == 0 || ft.created[0].Summary == "" {
+		t.Errorf("no tickets created")
+	}
+}
