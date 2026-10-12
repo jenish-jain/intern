@@ -154,3 +154,35 @@ func TestCheckPath_Traversal(t *testing.T) {
 		t.Error("expected traversal to be rejected")
 	}
 }
+
+func TestMatchesAny(t *testing.T) {
+	cases := map[string]bool{
+		"internal/auth/login_test.go": true,
+		"internal/auth/login.go":      false,
+		"tests/api/login.spec.ts":     true,
+		"web/src/__tests__/App.tsx":   true,
+		"web/src/App.test.tsx":        true,
+		"web/src/App.tsx":             false,
+		"pkg/test_utils.py":           true,
+		"testsuite/x.go":              false,
+	}
+	for path, want := range cases {
+		if got := MatchesAny(path, DefaultTestPaths); got != want {
+			t.Errorf("MatchesAny(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+func TestCheck_OnlyPaths(t *testing.T) {
+	r := newRepo(t)
+	base := r.base()
+	r.write("internal/a_test.go", "package internal\n")
+	r.write("internal/a.go", "package internal\n\nfunc Patched() {}\n")
+	_, violations, err := Check(context.Background(), r.dir, base, Policy{OnlyPaths: DefaultTestPaths})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Path != "internal/a.go" {
+		t.Errorf("violations = %s", reasons(violations))
+	}
+}

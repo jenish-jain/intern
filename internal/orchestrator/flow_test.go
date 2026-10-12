@@ -225,12 +225,16 @@ func TestFlow_ReviewRequestsChangesThenApproves(t *testing.T) {
 		t.Errorf("fix not committed on the PR branch: %q", out)
 	}
 
-	c.advanceFlows(ctx) // review round 2: approved, no test or merge stage
-	if flows := c.State.ListFlows(); len(flows) != 0 {
-		t.Errorf("approved flow with no later stages should end, got %+v", flows)
+	c.advanceFlows(ctx) // review round 2: approved; no test stage, no auto-merge
+	if flows := c.State.ListFlows(); len(flows) != 1 || flows[0].Stage != StageMerge {
+		t.Errorf("approved flow should wait at ready-to-merge, got %+v", flows)
 	}
-	if repo.pr.HasLabel("intern:review") {
-		t.Errorf("stage label not removed: %v", repo.pr.Labels)
+	if repo.pr.HasLabel("intern:review") || !repo.pr.HasLabel("intern:ready-to-merge") {
+		t.Errorf("labels = %v", repo.pr.Labels)
+	}
+	c.advanceFlows(ctx) // waits for a human merge
+	if len(repo.merges) != 0 {
+		t.Error("must not merge without AUTO_MERGE")
 	}
 	if rr.count(runner.RoleReviewer) != 2 {
 		t.Errorf("reviewer ran %d times", rr.count(runner.RoleReviewer))
@@ -277,8 +281,8 @@ func TestFlow_EscalatesAfterMaxRoundsAndResumes(t *testing.T) {
 		t.Fatalf("resume did not reset the flow: %+v labels %v", f, repo.pr.Labels)
 	}
 	c.advanceFlows(ctx)
-	if len(c.State.ListFlows()) != 0 {
-		t.Error("approved flow should end")
+	if fl := c.State.ListFlows(); len(fl) != 1 || fl[0].Stage != StageMerge {
+		t.Errorf("approved flow should wait at ready-to-merge, got %+v", fl)
 	}
 }
 
@@ -311,5 +315,73 @@ func TestState_FlowsPersist(t *testing.T) {
 	}
 	if fl := s2.ListFlows(); len(fl) != 1 || fl[0].Stage != StageReview {
 		t.Errorf("flows after reload = %+v", fl)
+	}
+}
+
+func tester(passed bool, write func(dir string), failures ...string) func(runner.Job) runner.Result {
+	return func(j runner.Job) runner.Result {
+		if write != nil {
+			write(j.Workdir)
+		}
+		return runner.Result{Status: runner.StatusDone, Summary: "tested", Test: &runner.TestReport{Passed: passed, Failures: failures}}
+	}
+}
+
+func TestFlow_TesterFailureGoesToDeveloperThenPasses(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleTester: {
+			tester(false, func(dir string) { writeFile(fx, dir, "tests/accept.sh", "grep -qx v2 app.txt\n") }, "app.txt should say v2"),
+			tester(true, nil),
+		},
+		runner.RoleDeveloper: {func(j runner.Job) runner.Result {
+			writeFile(t, j.Workdir, "app.txt", "v2\n")
+			return runner.Result{Status: runner.StatusDone, Summary: "fixed"}
+		}},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{TestEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	if fl := c.State.ListFlows(); fl[0].Stage != StageTest {
+		t.Fatalf("first stage = %s, want testing", fl[0].Stage)
+	}
+
+	c.advanceFlows(ctx) // tester writes a failing acceptance test
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "app.txt should say v2") {
+		t.Fatalf("after failing test: %+v", f)
+	}
+	if out, err := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:tests/accept.sh").Output(); err != nil || len(out) == 0 {
+		t.Error("tester's test should be committed on the PR branch")
+	}
+	if len(repo.pushes) != 1 || !strings.Contains(repo.comments[0], "Acceptance tests failed") {
+		t.Errorf("pushes %v comments %v", repo.pushes, repo.comments)
+	}
+
+	c.advanceFlows(ctx) // developer fixes; no reviewer, so back to testing
+	c.advanceFlows(ctx) // tester passes
+	if fl := c.State.ListFlows(); len(fl) != 1 || fl[0].Stage != StageMerge {
+		t.Fatalf("expected ready-to-merge, got %+v", fl)
+	}
+}
+
+func TestFlow_TesterTouchingAppCodeEscalates(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleTester: {tester(true, func(dir string) { writeFile(fx, dir, "app.txt", "patched by tester\n") })},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{TestEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageNeedsHuman || !strings.Contains(f.Reason, "app.txt") {
+		t.Fatalf("expected escalation, got %+v", f)
+	}
+	if len(repo.pushes) != 0 {
+		t.Error("tester's out-of-bounds change must not be pushed")
+	}
+	if out, _ := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:app.txt").Output(); string(out) != "v1\n" {
+		t.Errorf("app code changed on branch: %q", out)
 	}
 }

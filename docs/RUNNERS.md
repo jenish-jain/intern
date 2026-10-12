@@ -29,6 +29,7 @@ The developer persona lives in `internal/personas/developer.md` and ships in the
 |---|---|---|---|
 | Developer | `internal/personas/developer.md` | Read, edit, run build and tests | Summary, judgment-call notes, or questions |
 | Reviewer | `internal/personas/reviewer.md` | Read and run verify only; edit tools and `git add`/`commit` are denied | Verdict (`approve` or `request_changes`) with line comments |
+| Tester | `internal/personas/tester.md` | Read, run, and write test files only (enforced by the gate) | Whether acceptance criteria pass, with one entry per failure |
 
 ## The flow after a PR opens
 
@@ -36,7 +37,9 @@ With `REVIEW_ENABLED=true`, each PR the developer opens becomes a flow. Every po
 
 1. **Review.** The reviewer reads the diff against the base branch, runs verify, and posts a review on the PR. Approval moves the flow on. A request for changes sends the comments to the developer.
 2. **Changes requested.** The developer addresses the comments on the PR branch. Intern gates, commits, verifies, pushes, comments a summary, and returns the PR to review.
-3. **Needs human.** After `MAX_REVIEW_ROUNDS` rejected reviews, or when a persona has questions, intern comments on the PR and the ticket and waits. Push fixes or answer in the PR, then add the `intern:resume` label to restart review with a fresh round budget.
+3. **Testing** (`TEST_ENABLED=true`). After approval, the tester writes acceptance tests from the ticket's criteria and runs them with the verify commands. The gate rejects any change outside test paths (`test_paths` in `.intern/project.yaml`, or common defaults such as `*_test.go`, `tests/`, `*.spec.ts`). New tests are committed and pushed either way. Failures go back to the developer, whose fix returns the PR to review.
+4. **Ready to merge.** The PR waits with the `intern:ready-to-merge` label. With `AUTO_MERGE=true` intern merges it once CI is green; otherwise a human merges.
+5. **Needs human.** After `MAX_REVIEW_ROUNDS` rejected reviews, twice that many developer fix rounds, a tester change outside test paths, or when a persona has questions, intern comments on the PR and the ticket and waits. Push fixes or answer in the PR, then add the `intern:resume` label to restart review with a fresh round budget.
 
 The current stage is visible as an `intern:<stage>` label on the PR. Merged or closed PRs drop out of the flow; merged ones move their ticket to Done.
 
@@ -66,6 +69,7 @@ verify:
     run: npm test
     timeout: 15m
 protected_paths: [".github/", ".intern/"]
+test_paths: ["tests/", "*.test.ts"]   # where the tester may write
 ```
 
 After the runner finishes, intern gates the diff (allowed directories, file count, protected paths, file size, symlinks, credential patterns), commits, runs `setup` then `verify`, and hands any failure output back to the same runner session up to `VERIFY_FIX_ATTEMPTS` times. Without this file, intern falls back to `go vet` / `go test` according to `RUN_VET_BEFORE_PR` / `RUN_TESTS_BEFORE_PR`.

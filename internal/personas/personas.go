@@ -16,6 +16,9 @@ var developer string
 //go:embed reviewer.md
 var reviewer string
 
+//go:embed tester.md
+var tester string
+
 // For returns the system prompt addition for a role.
 func For(role runner.Role) (string, error) {
 	switch role {
@@ -23,6 +26,8 @@ func For(role runner.Role) (string, error) {
 		return developer, nil
 	case runner.RoleReviewer:
 		return reviewer, nil
+	case runner.RoleTester:
+		return tester, nil
 	default:
 		return "", fmt.Errorf("no persona defined for role %q", role)
 	}

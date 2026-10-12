@@ -42,6 +42,9 @@ type Config struct {
 	Verify []Command `yaml:"verify"`
 	// ProtectedPaths are path prefixes agents must not change.
 	ProtectedPaths []string `yaml:"protected_paths,omitempty"`
+	// TestPaths are where the tester may write (directories ending in "/"
+	// or file-name globs). Empty uses the gate's defaults.
+	TestPaths []string `yaml:"test_paths,omitempty"`
 }
 
 // Load reads the contract from repoRoot. found is false when the file

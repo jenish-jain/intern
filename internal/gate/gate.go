@@ -33,6 +33,38 @@ type Policy struct {
 	// MaxFileBytes caps the size of each added or modified file (0 uses
 	// DefaultMaxFileBytes).
 	MaxFileBytes int64
+	// OnlyPaths, when set, restricts changes to matching paths. An entry
+	// ending in "/" matches that directory anywhere in the tree; any other
+	// entry is a glob matched against the file name (e.g. "*_test.go").
+	OnlyPaths []string
+}
+
+// DefaultTestPaths are where testers may write when the project doesn't
+// say otherwise.
+var DefaultTestPaths = []string{
+	"tests/", "test/", "e2e/", "__tests__/", "spec/",
+	"*_test.go", "*.test.ts", "*.test.tsx", "*.test.js", "*.spec.ts", "*.spec.js",
+	"test_*.py", "*_test.py", "*_spec.rb",
+}
+
+// MatchesAny reports whether path matches one of the OnlyPaths-style
+// patterns.
+func MatchesAny(path string, patterns []string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	base := filepath.Base(clean)
+	for _, p := range patterns {
+		if strings.HasSuffix(p, "/") {
+			dir := strings.TrimSuffix(p, "/")
+			if strings.HasPrefix(clean, dir+"/") || strings.Contains(clean, "/"+dir+"/") {
+				return true
+			}
+			continue
+		}
+		if ok, _ := filepath.Match(p, base); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Change is one changed path. Status is git's name-status letter
@@ -132,6 +164,9 @@ func checkPath(path string, p Policy) string {
 	clean := filepath.ToSlash(filepath.Clean(path))
 	if filepath.IsAbs(path) || strings.HasPrefix(clean, "../") || clean == ".." {
 		return "path escapes the repository"
+	}
+	if len(p.OnlyPaths) > 0 && !MatchesAny(clean, p.OnlyPaths) {
+		return "only test files may be changed in this stage"
 	}
 	for _, prefix := range p.ProtectedPaths {
 		prefix = strings.TrimSuffix(filepath.ToSlash(prefix), "/")

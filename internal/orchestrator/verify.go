@@ -42,6 +42,20 @@ func legacyVerifyCommands(cfg *config.Config) []project.Command {
 	return cmds
 }
 
+// verifyCommands loads the project contract and returns it with the
+// commands to run on a change: setup then verify, or the legacy Go
+// commands when the repo has no contract.
+func (c *Coordinator) verifyCommands(repoRoot string) (project.Config, []project.Command, error) {
+	proj, found, err := project.Load(repoRoot)
+	if err != nil {
+		return proj, nil, err
+	}
+	if !found {
+		return proj, legacyVerifyCommands(c.Cfg), nil
+	}
+	return proj, append(append([]project.Command{}, proj.Setup...), proj.Verify...), nil
+}
+
 // workOutcome is the result of running a job through gate and verify.
 type workOutcome struct {
 	Result  runner.Result // last runner result; Usage is the total across rounds
@@ -89,13 +103,9 @@ func (c *Coordinator) developAndVerify(ctx context.Context, job runner.Job, base
 		return out, err
 	}
 
-	proj, found, err := project.Load(repoRoot)
+	proj, verifyCmds, err := c.verifyCommands(repoRoot)
 	if err != nil {
 		return out, err
-	}
-	verifyCmds := proj.Verify
-	if !found {
-		verifyCmds = legacyVerifyCommands(c.Cfg)
 	}
 	policy := gate.Policy{
 		AllowedDirs:    c.Cfg.AllowedWriteDirs,
@@ -131,7 +141,7 @@ func (c *Coordinator) developAndVerify(ctx context.Context, job runner.Job, base
 			return out, err
 		}
 
-		checks, ok := project.RunCommands(ctx, repoRoot, append(append([]project.Command{}, proj.Setup...), verifyCmds...))
+		checks, ok := project.RunCommands(ctx, repoRoot, verifyCmds)
 		out.Checks = checks
 		if ok {
 			if round > 0 {

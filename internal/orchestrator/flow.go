@@ -64,16 +64,13 @@ func (c *Coordinator) firstStage() Stage {
 	}
 }
 
-// stageAfterReview is where an approved PR goes next.
+// stageAfterReview is where an approved PR goes next. StageMerge without
+// AUTO_MERGE waits, labelled ready-to-merge, for a human to merge.
 func (c *Coordinator) stageAfterReview() Stage {
-	switch {
-	case c.Cfg.TestEnabled:
+	if c.Cfg.TestEnabled {
 		return StageTest
-	case c.Cfg.AutoMerge:
-		return StageMerge
-	default:
-		return ""
 	}
+	return StageMerge
 }
 
 // startFlow begins tracking a newly opened PR.
@@ -168,6 +165,8 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 		return c.runReview(ctx, f)
 	case StageChangesRequested:
 		return c.runDeveloperFix(ctx, f)
+	case StageTest:
+		return c.runTest(ctx, f)
 	case StageNeedsHuman:
 		if pr.HasLabel(LabelResume) {
 			_ = c.Repository.RemoveLabel(ctx, f.PRURL, LabelResume)
@@ -280,6 +279,10 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 	if err != nil {
 		return err
 	}
+	if limit := 2 * c.Cfg.MaxReviewRounds; f.FixRounds >= limit {
+		c.escalate(ctx, f, fmt.Sprintf("still not passing after %d developer fix rounds", f.FixRounds))
+		return nil
+	}
 	f.FixRounds++
 	out, err := c.developAndVerify(ctx, runner.Job{
 		Role: runner.RoleDeveloper, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
@@ -303,5 +306,102 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 	}
 	f.Feedback = ""
 	c.moveFlow(ctx, f, c.firstStage())
+	return nil
+}
+
+// runTest has the tester write and run acceptance tests on the PR branch.
+// Tests it adds are committed and pushed whatever the outcome, so the
+// developer sees exactly what failed.
+func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
+	repoRoot, err := c.checkoutFlowBranch(ctx, f)
+	if err != nil {
+		return err
+	}
+	base, err := gate.HeadSHA(ctx, repoRoot)
+	if err != nil {
+		return err
+	}
+	res, err := c.Runner.Run(ctx, runner.Job{
+		Role: runner.RoleTester, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
+		Workdir: repoRoot, BaseBranch: c.baseBranch(),
+		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+	})
+	f.CostUSD += res.Usage.CostUSD
+	if err != nil {
+		return err
+	}
+	if res.Status == runner.StatusNeedsHuman {
+		c.escalate(ctx, f, "the tester has questions: "+strings.Join(res.Questions, "; "))
+		return nil
+	}
+	if res.Status != runner.StatusDone || res.Test == nil {
+		return fmt.Errorf("tester did not report a result: %s", res.Summary)
+	}
+
+	proj, cmds, err := c.verifyCommands(repoRoot)
+	if err != nil {
+		return err
+	}
+	testPaths := proj.TestPaths
+	if len(testPaths) == 0 {
+		testPaths = gate.DefaultTestPaths
+	}
+	changes, violations, err := gate.Check(ctx, repoRoot, base, gate.Policy{
+		OnlyPaths: testPaths, ProtectedPaths: proj.ProtectedPaths, MaxFiles: c.Cfg.PlanMaxFiles,
+	})
+	if err != nil {
+		return fmt.Errorf("gate: %w", err)
+	}
+	if len(violations) > 0 {
+		msgs := make([]string, len(violations))
+		for i, v := range violations {
+			msgs[i] = v.String()
+		}
+		c.escalate(ctx, f, "the tester changed files it may not touch: "+strings.Join(msgs, "; "))
+		return nil
+	}
+	if len(changes) > 0 {
+		if err := c.commitStaged(ctx, repoRoot, fmt.Sprintf("test(%s): acceptance tests", f.TicketKey)); err != nil {
+			return err
+		}
+	}
+	checks, verifyOK := project.RunCommands(ctx, repoRoot, cmds)
+	if len(changes) > 0 {
+		if err := c.Repository.Push(ctx, f.Branch); err != nil {
+			return fmt.Errorf("push: %w", err)
+		}
+	}
+
+	passed := res.Test.Passed && verifyOK
+	verdict := "Acceptance tests passed"
+	if !passed {
+		verdict = "Acceptance tests failed"
+	}
+	msg := fmt.Sprintf("**intern tester: %s**\n\n%s", verdict, res.Summary)
+	if len(res.Test.Failures) > 0 {
+		msg += "\n\nFailures:\n- " + strings.Join(res.Test.Failures, "\n- ")
+	}
+	if lines := project.Summary(checks); len(lines) > 0 {
+		msg += "\n\nVerify:\n- " + strings.Join(lines, "\n- ")
+	}
+	if err := c.Repository.CommentPR(ctx, f.PRURL, msg); err != nil {
+		logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", err)
+	}
+
+	if passed {
+		c.moveFlow(ctx, f, StageMerge)
+		return nil
+	}
+	var fb strings.Builder
+	fb.WriteString("Acceptance testing found problems. The tester's tests are committed on this branch; make the application code satisfy them without weakening or deleting them.\n\n")
+	fb.WriteString("Tester summary: " + res.Summary + "\n")
+	for _, fail := range res.Test.Failures {
+		fb.WriteString("\n- " + fail)
+	}
+	if !verifyOK {
+		fb.WriteString("\n\n" + project.FailureReport(checks))
+	}
+	f.Feedback = fb.String()
+	c.moveFlow(ctx, f, StageChangesRequested)
 	return nil
 }
