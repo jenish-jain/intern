@@ -1,8 +1,9 @@
 name: CI/CD
 
 on:
+  # Any base branch, so stacked PRs (targeting another feature branch) get
+  # vet/test too. Release and deploy still only run on push to master.
   pull_request:
-    branches: [master]
   push:
     branches: [master]
 

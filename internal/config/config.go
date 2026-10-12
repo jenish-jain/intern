@@ -44,6 +44,7 @@ type Config struct {
 	AgentUsername        string
 	PollingInterval      string
 	MaxConcurrentTickets int
+	MaxTicketAttempts    int // Failed attempts before a ticket is skipped (default: 3)
 
 	WorkingDir   string // Base working directory, will be joined with GitHubRepo to create ./workspace/{repoName}
 	BaseBranch   string
@@ -108,6 +109,7 @@ func LoadConfig() (*Config, error) {
 		AgentUsername:        viper.GetString("AGENT_USERNAME"),
 		PollingInterval:      viper.GetString("POLLING_INTERVAL"),
 		MaxConcurrentTickets: viper.GetInt("MAX_CONCURRENT_TICKETS"),
+		MaxTicketAttempts:    viper.GetInt("MAX_TICKET_ATTEMPTS"),
 
 		WorkingDir:   viper.GetString("WORKING_DIR"),
 		BaseBranch:   viper.GetString("BASE_BRANCH"),
@@ -160,6 +162,9 @@ func LoadConfig() (*Config, error) {
 	// ContextCacheEnabled defaults to false (opt-in)
 	if cfg.PlanMaxFiles <= 0 {
 		cfg.PlanMaxFiles = 20
+	}
+	if cfg.MaxTicketAttempts <= 0 {
+		cfg.MaxTicketAttempts = 3
 	}
 	// Self-healing defaults
 	if cfg.SelfHealMaxAttempts <= 0 {

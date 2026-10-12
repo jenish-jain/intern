@@ -55,6 +55,7 @@ OLLAMA_MODEL="qwen2.5-coder:7b"  # Options: qwen2.5-coder:7b, deepseek-coder:6.7
 AGENT_USERNAME="ai-intern"
 POLLING_INTERVAL="30s"
 MAX_CONCURRENT_TICKETS=1
+MAX_TICKET_ATTEMPTS=3
 
 WORKING_DIR="./workspace"  # Will be ./workspace/{GITHUB_REPO} automatically
 BASE_BRANCH="master"

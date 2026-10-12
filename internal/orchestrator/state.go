@@ -12,15 +12,42 @@ import (
 
 type State struct {
 	Processed map[string]bool `json:"processed"`
-	mu        sync.Mutex      `json:"-"`
-	filePath  string          `json:"-"`
+	// Failures counts failed processing attempts per ticket key. The poll
+	// loop stops retrying a ticket once this reaches MAX_TICKET_ATTEMPTS,
+	// so a ticket that can never succeed doesn't burn AI spend every cycle.
+	Failures map[string]int `json:"failures,omitempty"`
+	mu       sync.Mutex     `json:"-"`
+	filePath string         `json:"-"`
 }
 
 func NewState(filePath string) *State {
 	return &State{
 		Processed: make(map[string]bool),
+		Failures:  make(map[string]int),
 		filePath:  filePath,
 	}
+}
+
+// Attempts returns how many times processing has failed for key.
+func (s *State) Attempts(key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Failures[key]
+}
+
+// RecordFailure increments and persists the failure count for key,
+// returning the new count.
+func (s *State) RecordFailure(key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Failures == nil {
+		s.Failures = make(map[string]int)
+	}
+	s.Failures[key]++
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err, "ticket", key)
+	}
+	return s.Failures[key]
 }
 
 func (s *State) IsProcessed(key string) bool {
@@ -111,6 +138,7 @@ func (s *State) Load() error {
 	// Decode into a temporary structure first
 	var temp struct {
 		Processed map[string]bool `json:"processed"`
+		Failures  map[string]int  `json:"failures"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -123,6 +151,11 @@ func (s *State) Load() error {
 	} else {
 		// Initialize empty map if null in JSON
 		s.Processed = make(map[string]bool)
+	}
+	if temp.Failures != nil {
+		s.Failures = temp.Failures
+	} else {
+		s.Failures = make(map[string]int)
 	}
 
 	return nil

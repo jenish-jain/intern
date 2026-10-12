@@ -168,6 +168,11 @@ func (c *Coordinator) Run(ctx context.Context) {
 				if c.State.IsProcessed(t.Key) {
 					continue
 				}
+				if n := c.State.Attempts(t.Key); n >= c.Cfg.MaxTicketAttempts {
+					logger.Warn("Skipping ticket - attempt limit reached; needs human attention",
+						"ticket", t.Key, "attempts", n, "limit", c.Cfg.MaxTicketAttempts)
+					continue
+				}
 				if blocker := c.journalBlocker(t.Summary + " " + t.Description); blocker != "" {
 					logger.Info("Deferring ticket - related work not yet merged", "ticket", t.Key, "waiting_on", blocker)
 					continue
@@ -191,7 +196,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 
 					// Process the ticket
 					if err := c.processTicket(ctx, key, summary, description); err != nil {
-						logger.Error("Failed processing ticket", "key", key, "error", err)
+						n := c.State.RecordFailure(key)
+						logger.Error("Failed processing ticket", "key", key, "error", err,
+							"attempt", n, "limit", c.Cfg.MaxTicketAttempts)
 						c.Metrics.IncTicketsFailed()
 						return
 					}
@@ -554,7 +561,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			"key", key,
 			"attempts", healResult.TotalAttempts,
 			"cost", healResult.TotalCost)
-		return nil
+		return fmt.Errorf("quality gates still failing after %d healing attempts", healResult.TotalAttempts)
 	}
 
 	// If healing was needed and succeeded, commit the fixes
@@ -579,7 +586,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if !ok {
 		// This shouldn't happen after successful healing, but check anyway
 		logger.Error("Quality gates failed after successful healing; skipping push/PR", "key", key)
-		return nil
+		return fmt.Errorf("quality gates failed on final check before push")
 	}
 	// Check for dry-run mode
 	if c.Cfg.DryRun {
