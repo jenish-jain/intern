@@ -63,9 +63,51 @@ type Issue struct {
 			Name    string `json:"name"`
 			ID      string `json:"id"`
 		} `json:"priority"`
-		Assignee *User `json:"assignee"`
-		Reporter *User `json:"reporter"`
+		Assignee   *User       `json:"assignee"`
+		Reporter   *User       `json:"reporter"`
+		IssueLinks []IssueLink `json:"issuelinks"`
 	} `json:"fields"`
+}
+
+// IssueLink is one entry of an issue's issuelinks field. Exactly one of
+// InwardIssue / OutwardIssue is set. An entry with InwardIssue X on issue Y
+// reads "Y <Type.Inward> X", e.g. "Y is blocked by X".
+type IssueLink struct {
+	Type struct {
+		Name    string `json:"name"`
+		Inward  string `json:"inward"`
+		Outward string `json:"outward"`
+	} `json:"type"`
+	InwardIssue  *LinkedIssue `json:"inwardIssue,omitempty"`
+	OutwardIssue *LinkedIssue `json:"outwardIssue,omitempty"`
+}
+
+// LinkedIssue is the abbreviated issue embedded in an issue link.
+type LinkedIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Status struct {
+			Name           string `json:"name"`
+			StatusCategory struct {
+				Key string `json:"key"`
+			} `json:"statusCategory"`
+		} `json:"status"`
+	} `json:"fields"`
+}
+
+// blockers extracts the issues this one is blocked by.
+func (i *Issue) blockers() []ticketing.Blocker {
+	var out []ticketing.Blocker
+	for _, l := range i.Fields.IssueLinks {
+		if !strings.EqualFold(l.Type.Name, "Blocks") || l.InwardIssue == nil {
+			continue
+		}
+		out = append(out, ticketing.Blocker{
+			Key:  l.InwardIssue.Key,
+			Done: l.InwardIssue.Fields.Status.StatusCategory.Key == ticketing.StatusCategoryDone,
+		})
+	}
+	return out
 }
 
 // User represents a JIRA user
@@ -166,6 +208,7 @@ func (i *Issue) ToTicket() ticketing.Ticket {
 		Description:    extractTextFromDescription(i.Fields.Description),
 		Status:         i.Fields.Status.Name,
 		StatusCategory: i.Fields.Status.StatusCategory.Key,
+		Blockers:       i.blockers(),
 		Priority:       i.Fields.Priority.Name,
 		URL:            i.Self,
 	}

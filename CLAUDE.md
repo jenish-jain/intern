@@ -91,7 +91,7 @@ make mocks              # Generate mocks (requires mockgen)
 ### Data Flow
 1. Poll JIRA for tickets assigned to `AGENT_USERNAME`
 2. Prepare local repo (clone if needed, sync with remote, switch to base branch)
-3. For each unprocessed ticket:
+3. For each unprocessed ticket whose "is blocked by" tickets are all Done (merged):
    - Create feature branch
    - Build repo context (limited by `CONTEXT_MAX_FILES` and `CONTEXT_MAX_BYTES`)
    - Call AI agent to generate code changes

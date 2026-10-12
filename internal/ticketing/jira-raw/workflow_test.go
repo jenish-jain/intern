@@ -169,3 +169,32 @@ func TestErrorResponseSurfacesMessage(t *testing.T) {
 		t.Fatalf("expected JIRA error message, got %v", err)
 	}
 }
+
+func TestGetTickets_ParsesBlockers(t *testing.T) {
+	c, _ := newTestClient(t, func(r *http.Request) (int, string) {
+		return 200, `{"issues":[{"key":"P-3","fields":{"summary":"S","status":{"name":"To Do"},"issuelinks":[
+			{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},
+			 "inwardIssue":{"key":"P-1","fields":{"status":{"name":"Done","statusCategory":{"key":"done"}}}}},
+			{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},
+			 "inwardIssue":{"key":"P-2","fields":{"status":{"name":"In Review","statusCategory":{"key":"indeterminate"}}}}},
+			{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},
+			 "outwardIssue":{"key":"P-9","fields":{"status":{"name":"To Do","statusCategory":{"key":"new"}}}}},
+			{"type":{"name":"Relates","inward":"relates to","outward":"relates to"},
+			 "inwardIssue":{"key":"P-8","fields":{"status":{"name":"To Do","statusCategory":{"key":"new"}}}}}
+		]}}]}`
+	})
+	tickets, err := c.GetTickets(context.Background(), "bot", "P")
+	if err != nil {
+		t.Fatalf("GetTickets: %v", err)
+	}
+	if len(tickets) != 1 {
+		t.Fatalf("got %d tickets", len(tickets))
+	}
+	got := tickets[0].Blockers
+	if len(got) != 2 || got[0] != (ticketing.Blocker{Key: "P-1", Done: true}) || got[1] != (ticketing.Blocker{Key: "P-2", Done: false}) {
+		t.Errorf("blockers = %+v, want P-1 done and P-2 open (P-9 is blocked by us, P-8 is not a Blocks link)", got)
+	}
+	if open := tickets[0].OpenBlockers(); len(open) != 1 || open[0] != "P-2" {
+		t.Errorf("OpenBlockers = %v, want [P-2]", open)
+	}
+}

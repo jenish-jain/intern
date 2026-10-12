@@ -48,7 +48,8 @@ func (c *Coordinator) comment(ctx context.Context, key, body string) {
 
 // dispatchTickets runs process for each eligible ticket on a bounded worker
 // pool and waits for all of them. Tickets already processed, at their
-// attempt limit, or deferred by the journal are skipped.
+// attempt limit, blocked by unfinished tickets, or deferred by the journal
+// are skipped.
 func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.Ticket, process func(ctx context.Context, key, summary, description string) error) {
 	maxWorkers := c.Cfg.MaxConcurrentTickets
 	if maxWorkers <= 0 {
@@ -66,7 +67,13 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 				"ticket", t.Key, "attempts", n, "limit", c.Cfg.MaxTicketAttempts)
 			continue
 		}
-		if c.Journal != nil {
+		if open := t.OpenBlockers(); len(open) > 0 {
+			logger.Info("Deferring ticket - blocked by unfinished tickets", "ticket", t.Key, "blocked_by", open)
+			continue
+		}
+		// Explicit links are authoritative. The journal's keyword-overlap
+		// guess only applies to tickets with no dependency links at all.
+		if c.Journal != nil && len(t.Blockers) == 0 {
 			if blocker := c.journalBlocker(t.Summary + " " + t.Description); blocker != "" {
 				logger.Info("Deferring ticket - related work not yet merged", "ticket", t.Key, "waiting_on", blocker)
 				continue

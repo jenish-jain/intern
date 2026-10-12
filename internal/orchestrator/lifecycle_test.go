@@ -237,3 +237,51 @@ func TestDiscardLocalChanges_KeepsAgentState(t *testing.T) {
 		t.Error("agent state directory must be preserved")
 	}
 }
+
+func TestDispatch_HoldsTicketUntilBlockersDone(t *testing.T) {
+	c, _ := newLifecycleCoordinator(t, &config.Config{})
+	var processed []string
+	process := func(_ context.Context, key, _, _ string) error {
+		processed = append(processed, key)
+		return nil
+	}
+	blocked := ticketing.Ticket{Key: "P-2", Blockers: []ticketing.Blocker{{Key: "P-1", Done: false}}}
+
+	c.dispatchTickets(context.Background(), []ticketing.Ticket{blocked}, process)
+	if len(processed) != 0 {
+		t.Fatalf("blocked ticket was processed: %v", processed)
+	}
+
+	blocked.Blockers[0].Done = true
+	c.dispatchTickets(context.Background(), []ticketing.Ticket{blocked}, process)
+	if len(processed) != 1 || processed[0] != "P-2" {
+		t.Errorf("unblocked ticket not processed: %v", processed)
+	}
+}
+
+func TestDispatch_ExplicitLinksBypassJournalHeuristic(t *testing.T) {
+	c, _ := newLifecycleCoordinator(t, &config.Config{})
+	c.Journal = journal.Load(t.TempDir())
+	// An unmerged prior entry that shares keywords with the new ticket.
+	if err := c.Journal.Append(journal.Entry{
+		TicketKey: "P-1", Summary: "payment webhook handler", PRURL: "https://github.com/o/r/pull/1",
+		FilesChanged: []string{"internal/payments/webhook.go"}, Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := "extend payment webhook handler in internal/payments/webhook.go"
+	calls := 0
+	process := func(context.Context, string, string, string) error { calls++; return nil }
+
+	heuristic := ticketing.Ticket{Key: "P-5", Summary: text}
+	c.dispatchTickets(context.Background(), []ticketing.Ticket{heuristic}, process)
+	if calls != 0 {
+		t.Fatal("expected journal heuristic to defer an unlinked related ticket")
+	}
+
+	linked := ticketing.Ticket{Key: "P-6", Summary: text, Blockers: []ticketing.Blocker{{Key: "P-0", Done: true}}}
+	c.dispatchTickets(context.Background(), []ticketing.Ticket{linked}, process)
+	if calls != 1 {
+		t.Error("ticket with explicit, finished blockers should not be deferred by the heuristic")
+	}
+}
