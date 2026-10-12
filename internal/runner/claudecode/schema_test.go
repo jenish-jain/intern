@@ -54,18 +54,21 @@ func TestArgs_ReviewerCannotEdit(t *testing.T) {
 	rev := strings.Join(r.args(runner.Job{Role: runner.RoleReviewer, Workdir: dir}, "persona"), "\n")
 	allowed := between(rev, "--allowedTools\n", "\n")
 	denied := between(rev, "--disallowedTools\n", "\n")
-	if strings.Contains(allowed, "Edit") || strings.Contains(allowed, "Write") {
-		t.Errorf("reviewer allowed edit tools: %s", allowed)
-	}
-	if !strings.Contains(denied, "Edit") || !strings.Contains(denied, "Write") {
-		t.Errorf("reviewer edit tools not denied: %s", denied)
+	allowedSet := toSet(allowed)
+	for _, tool := range editTools {
+		if allowedSet[tool] {
+			t.Errorf("reviewer allowed %s", tool)
+		}
+		if !toSet(denied)[tool] {
+			t.Errorf("reviewer did not deny %s", tool)
+		}
 	}
 	if !strings.Contains(rev, `"verdict"`) {
 		t.Error("reviewer schema not used")
 	}
 
 	dev := strings.Join(r.args(runner.Job{Role: runner.RoleDeveloper, Workdir: dir}, "persona"), "\n")
-	if !strings.Contains(between(dev, "--allowedTools\n", "\n"), "Edit") {
+	if !toSet(between(dev, "--allowedTools\n", "\n"))["Edit"] {
 		t.Error("developer should be allowed to edit")
 	}
 }
@@ -81,4 +84,12 @@ func between(s, start, end string) string {
 		return s[:j]
 	}
 	return s
+}
+
+func toSet(csv string) map[string]bool {
+	m := map[string]bool{}
+	for _, t := range strings.Split(csv, ",") {
+		m[t] = true
+	}
+	return m
 }

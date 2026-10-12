@@ -45,15 +45,15 @@ var schemas = map[runner.Role]string{
 	runner.RoleArchitect: `{"type":"object","additionalProperties":false,"required":["status","summary"],"properties":{` + commonProps + `}}`,
 }
 
-// editTools write files; reviewers don't get them.
-var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
+// editTools change the workspace; reviewers don't get them.
+var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash(git add:*)", "Bash(git commit:*)"}
 
 // readOnlyTools are always allowed when the sandbox is not isolated.
 // Roles that edit also get editTools.
 var readOnlyTools = []string{
 	"Read", "Glob", "Grep", "TodoWrite",
 	"Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
-	"Bash(git add:*)", "Bash(git commit:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(find:*)",
+	"Bash(ls:*)", "Bash(cat:*)", "Bash(find:*)",
 }
 
 // deniedTools are never allowed: the orchestrator owns remote side effects.
