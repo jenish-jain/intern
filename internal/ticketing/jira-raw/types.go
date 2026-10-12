@@ -160,13 +160,14 @@ func extractTextFromDocument(doc map[string]interface{}) string {
 // ToTicket converts a JIRA Issue to ticketing.Ticket
 func (i *Issue) ToTicket() ticketing.Ticket {
 	ticket := ticketing.Ticket{
-		ID:          i.ID,
-		Key:         i.Key,
-		Summary:     i.Fields.Summary,
-		Description: extractTextFromDescription(i.Fields.Description),
-		Status:      i.Fields.Status.Name,
-		Priority:    i.Fields.Priority.Name,
-		URL:         i.Self,
+		ID:             i.ID,
+		Key:            i.Key,
+		Summary:        i.Fields.Summary,
+		Description:    extractTextFromDescription(i.Fields.Description),
+		Status:         i.Fields.Status.Name,
+		StatusCategory: i.Fields.Status.StatusCategory.Key,
+		Priority:       i.Fields.Priority.Name,
+		URL:            i.Self,
 	}
 
 	// Handle assignee

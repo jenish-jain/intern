@@ -16,11 +16,11 @@ import (
 	"github.com/jenish-jain/logger"
 )
 
-// Client interface matches the existing JIRA client interface
+// Client is the JIRA client: the base ticketing.Client plus the optional
+// ticketing.Workflow operations.
 type Client interface {
-	HealthCheck(ctx context.Context) error
-	GetTickets(ctx context.Context, assignee, project string) ([]ticketing.Ticket, error)
-	UpdateTicketStatus(ctx context.Context, ticketKey, status string, transitions map[string]string) error
+	ticketing.Client
+	ticketing.Workflow
 }
 
 // client implements the raw JIRA HTTP client
@@ -177,7 +177,7 @@ func (c *client) GetTickets(ctx context.Context, assignee, project string) ([]ti
 	params := url.Values{}
 	params.Set("jql", jql)
 	params.Set("maxResults", "100")
-	params.Set("fields", "id,key,summary,description,status,priority,assignee,reporter")
+	params.Set("fields", issueFields)
 	params.Set("expand", "schema,names")
 
 	endpoint := "/rest/api/3/search/jql?" + params.Encode()
@@ -200,18 +200,23 @@ func (c *client) GetTickets(ctx context.Context, assignee, project string) ([]ti
 	var tickets []ticketing.Ticket
 	for _, issue := range searchResp.Issues {
 		tickets = append(tickets, issue.ToTicket())
-		fmt.Println("Ticket", issue.ToTicket())
 	}
 
 	logger.Debug("fetched tickets from JIRA", "count", len(tickets))
 	return tickets, nil
 }
 
-// UpdateTicketStatus transitions a ticket to a new status
+// UpdateTicketStatus transitions a ticket to a new status. A transition ID
+// configured in transitions wins; otherwise the transition is looked up by
+// target status name, so new workflow statuses need no extra config.
 func (c *client) UpdateTicketStatus(ctx context.Context, ticketKey, status string, transitions map[string]string) error {
-	transitionID, ok := transitions[status]
-	if !ok {
-		return fmt.Errorf("no transition ID found for status: %s", status)
+	transitionID := transitions[status]
+	if transitionID == "" {
+		id, err := c.findTransitionID(ctx, ticketKey, status)
+		if err != nil {
+			return err
+		}
+		transitionID = id
 	}
 
 	// URL encode the ticket key to handle special characters

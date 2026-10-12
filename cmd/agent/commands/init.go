@@ -26,8 +26,11 @@ JIRA_URL="https://company.atlassian.net"
 JIRA_EMAIL="ai-agent@company.com"
 JIRA_API_TOKEN="your-jira-api-token"
 JIRA_PROJECT_KEY="PROJ"
+# Transition IDs are optional: when unset, the agent looks up the
+# transition by target status name ("To Do", "In Progress", "In Review", "Done").
 JIRA_TRANSITION_TO_DO="11"
 JIRA_TRANSITION_IN_PROGRESS="21"
+JIRA_TRANSITION_IN_REVIEW=""
 JIRA_TRANSITION_DONE="31"
 
 # Slack Configuration (required if TICKETING_MODE=slack)

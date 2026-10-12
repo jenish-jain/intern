@@ -89,6 +89,7 @@ func LoadConfig() (*Config, error) {
 		JiraTransitions: map[string]string{
 			"To Do":       viper.GetString("JIRA_TRANSITION_TO_DO"),
 			"In Progress": viper.GetString("JIRA_TRANSITION_IN_PROGRESS"),
+			"In Review":   viper.GetString("JIRA_TRANSITION_IN_REVIEW"),
 			"Done":        viper.GetString("JIRA_TRANSITION_DONE"),
 		},
 
