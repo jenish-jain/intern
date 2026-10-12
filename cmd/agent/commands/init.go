@@ -49,6 +49,7 @@ AI_PROVIDER="anthropic"
 
 # Anthropic Configuration (required if AI_PROVIDER=anthropic)
 ANTHROPIC_API_KEY="your-anthropic-api-key"
+ANTHROPIC_MODEL=""  # optional; defaults to claude-opus-4-5-20251101
 
 # Ollama Configuration (required if AI_PROVIDER=ollama)
 # Make sure Ollama is running locally: https://ollama.ai

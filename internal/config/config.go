@@ -35,6 +35,7 @@ type Config struct {
 	GitHubRepo  string
 
 	AnthropicAPIKey string
+	AnthropicModel  string // Claude model ID; empty uses the client default
 
 	// AI Provider configuration
 	AIProvider    string // "anthropic" or "ollama"
@@ -102,6 +103,7 @@ func LoadConfig() (*Config, error) {
 		GitHubRepo:  viper.GetString("GITHUB_REPO"),
 
 		AnthropicAPIKey: viper.GetString("ANTHROPIC_API_KEY"),
+		AnthropicModel:  viper.GetString("ANTHROPIC_MODEL"),
 
 		AIProvider:    viper.GetString("AI_PROVIDER"),
 		OllamaBaseURL: viper.GetString("OLLAMA_BASE_URL"),

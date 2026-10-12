@@ -27,10 +27,6 @@ type TicketMetrics struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	RetryCount   int    `json:"retry_count"`
 
-	// Savings estimation (smart context vs full context)
-	EstimatedFullContextCost float64 `json:"estimated_full_context_cost,omitempty"`
-	CostSavings             float64 `json:"cost_savings,omitempty"`
-
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -53,9 +49,6 @@ type TicketResult struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	RetryCount   int    `json:"retry_count"`
 
-	EstimatedFullContextCost float64 `json:"estimated_full_context_cost,omitempty"`
-	CostSavings             float64 `json:"cost_savings,omitempty"`
-
 	Timestamp string `json:"timestamp"` // RFC3339 format
 }
 
@@ -75,8 +68,6 @@ func (tm *TicketMetrics) ToResult() TicketResult {
 		KeywordsExtracted:        tm.KeywordsExtracted,
 		ErrorMessage:             tm.ErrorMessage,
 		RetryCount:               tm.RetryCount,
-		EstimatedFullContextCost: tm.EstimatedFullContextCost,
-		CostSavings:              tm.CostSavings,
 		Timestamp:                tm.Timestamp.Format(time.RFC3339),
 	}
 }
@@ -146,10 +137,3 @@ func (tm *TicketMetrics) SetRetryCount(count int) {
 	tm.RetryCount = count
 }
 
-// SetSavingsEstimate sets the estimated savings from using smart context.
-func (tm *TicketMetrics) SetSavingsEstimate(fullContextCost float64) {
-	tm.EstimatedFullContextCost = fullContextCost
-	if fullContextCost > tm.Cost {
-		tm.CostSavings = fullContextCost - tm.Cost
-	}
-}

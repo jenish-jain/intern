@@ -186,8 +186,7 @@ func (h *Handler) handleCallback(ctx context.Context, event slackevents.EventsAP
 }
 
 // costSuffix renders a "\n\n_cost: ..._" line from the ticket's recorded
-// metrics (actual cost incurred, plus what full context would have cost if
-// smart context selection was used), or "" if no metrics were recorded yet
+// metrics (actual cost incurred), or "" if no metrics were recorded yet
 // (e.g. processing failed before any AI call was made).
 func (h *Handler) costSuffix(key string) string {
 	tm, ok := h.coordinator.LastTicketMetrics(key)
@@ -196,9 +195,6 @@ func (h *Handler) costSuffix(key string) string {
 	}
 	actual := fmt.Sprintf("actual %s (%s in / %s out tokens)",
 		ai.FormatCost(tm.Cost), ai.FormatTokens(tm.InputTokens), ai.FormatTokens(tm.OutputTokens))
-	if tm.EstimatedFullContextCost > 0 {
-		return fmt.Sprintf("\n\n_cost: %s, estimated %s without smart context_", actual, ai.FormatCost(tm.EstimatedFullContextCost))
-	}
 	return fmt.Sprintf("\n\n_cost: %s_", actual)
 }
 

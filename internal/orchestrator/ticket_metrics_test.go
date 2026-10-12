@@ -104,32 +104,6 @@ func TestTicketMetrics_SetRetryCount(t *testing.T) {
 	assert.Equal(t, 3, tm.RetryCount)
 }
 
-func TestTicketMetrics_SetSavingsEstimate(t *testing.T) {
-	t.Run("with savings", func(t *testing.T) {
-		tm := &TicketMetrics{
-			TicketKey: "PROJ-444",
-			Cost:      0.045,
-		}
-
-		tm.SetSavingsEstimate(0.150)
-
-		assert.Equal(t, 0.150, tm.EstimatedFullContextCost)
-		assert.InDelta(t, 0.105, tm.CostSavings, 0.001)
-	})
-
-	t.Run("no savings when smart is more expensive", func(t *testing.T) {
-		tm := &TicketMetrics{
-			TicketKey: "PROJ-555",
-			Cost:      0.150,
-		}
-
-		tm.SetSavingsEstimate(0.045) // Full context cheaper (shouldn't happen, but handle it)
-
-		assert.Equal(t, 0.045, tm.EstimatedFullContextCost)
-		assert.Equal(t, 0.0, tm.CostSavings) // No negative savings
-	})
-}
-
 func TestTicketMetrics_ToResult(t *testing.T) {
 	now := time.Now()
 	tm := &TicketMetrics{
@@ -145,9 +119,7 @@ func TestTicketMetrics_ToResult(t *testing.T) {
 		ContextSizeBytes:  24576,
 		KeywordsExtracted: 5,
 		RetryCount:        1,
-		EstimatedFullContextCost: 0.150,
-		CostSavings:              0.105,
-		Timestamp:                now,
+		Timestamp:         now,
 	}
 
 	result := tm.ToResult()
@@ -164,8 +136,6 @@ func TestTicketMetrics_ToResult(t *testing.T) {
 	assert.Equal(t, 24576, result.ContextSizeBytes)
 	assert.Equal(t, 5, result.KeywordsExtracted)
 	assert.Equal(t, 1, result.RetryCount)
-	assert.Equal(t, 0.150, result.EstimatedFullContextCost)
-	assert.InDelta(t, 0.105, result.CostSavings, 0.001)
 	assert.Equal(t, now.Format(time.RFC3339), result.Timestamp)
 }
 

@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // PricingModel defines the cost structure for an AI model.
 // Different providers and models have different pricing.
@@ -35,6 +38,40 @@ var (
 	// DefaultPricing is used when model-specific pricing is not available
 	DefaultPricing = ClaudeSonnet4
 )
+
+// anthropicPricing lists per-million-token prices by model ID prefix.
+// PricingFor picks the longest matching prefix, so dated IDs such as
+// "claude-opus-4-5-20251101" and newer point releases resolve correctly.
+// Source: Anthropic first-party API rates.
+var anthropicPricing = []PricingModel{
+	{Name: "claude-fable-5", InputPricePerMillion: 10.00, OutputPricePerMillion: 50.00},
+	{Name: "claude-mythos-5", InputPricePerMillion: 10.00, OutputPricePerMillion: 50.00},
+	{Name: "claude-opus-5-5", InputPricePerMillion: 4.00, OutputPricePerMillion: 20.00},
+	{Name: "claude-opus-5", InputPricePerMillion: 5.00, OutputPricePerMillion: 25.00},
+	{Name: "claude-opus-4-8", InputPricePerMillion: 5.00, OutputPricePerMillion: 25.00},
+	{Name: "claude-opus-4-7", InputPricePerMillion: 5.00, OutputPricePerMillion: 25.00},
+	{Name: "claude-opus-4-6", InputPricePerMillion: 5.00, OutputPricePerMillion: 25.00},
+	{Name: "claude-opus-4-5", InputPricePerMillion: 5.00, OutputPricePerMillion: 25.00},
+	{Name: "claude-opus-4", InputPricePerMillion: 15.00, OutputPricePerMillion: 75.00},
+	{Name: "claude-sonnet-5", InputPricePerMillion: 2.00, OutputPricePerMillion: 10.00},
+	{Name: "claude-sonnet-4", InputPricePerMillion: 3.00, OutputPricePerMillion: 15.00},
+	{Name: "claude-haiku-4-5", InputPricePerMillion: 1.00, OutputPricePerMillion: 5.00},
+}
+
+// PricingFor returns the pricing for a Claude model ID. ok is false when
+// the model is unknown, in which case DefaultPricing is returned.
+func PricingFor(model string) (pricing PricingModel, ok bool) {
+	best := -1
+	for i, p := range anthropicPricing {
+		if strings.HasPrefix(model, p.Name) && (best < 0 || len(p.Name) > len(anthropicPricing[best].Name)) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return DefaultPricing, false
+	}
+	return anthropicPricing[best], true
+}
 
 // CalculateCost computes the total cost in USD for given token usage.
 // Uses the specified pricing model, or DefaultPricing if nil.

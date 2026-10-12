@@ -16,7 +16,7 @@ func TestCalculateCost(t *testing.T) {
 			name:         "typical ticket with default pricing",
 			inputTokens:  5000,
 			outputTokens: 2000,
-			pricing:      nil, // Use default
+			pricing:      nil,   // Use default
 			expectedCost: 0.045, // (5000/1M * $3) + (2000/1M * $15) = $0.015 + $0.030 = $0.045
 		},
 		{
@@ -233,4 +233,29 @@ func TestPricingModels(t *testing.T) {
 			t.Errorf("DefaultPricing should be ClaudeSonnet4")
 		}
 	})
+}
+
+func TestPricingFor(t *testing.T) {
+	cases := []struct {
+		model   string
+		in, out float64
+		known   bool
+	}{
+		{"claude-opus-4-5-20251101", 5, 25, true},
+		{"claude-opus-5-5", 4, 20, true},
+		{"claude-opus-5", 5, 25, true},
+		{"claude-opus-4-1-20250805", 15, 75, true},
+		{"claude-sonnet-5-5", 2, 10, true},
+		{"claude-sonnet-4-20250514", 3, 15, true},
+		{"claude-sonnet-4-5", 3, 15, true},
+		{"claude-haiku-4-5-20251001", 1, 5, true},
+		{"claude-fable-5-1", 10, 50, true},
+		{"some-future-model", DefaultPricing.InputPricePerMillion, DefaultPricing.OutputPricePerMillion, false},
+	}
+	for _, c := range cases {
+		p, ok := PricingFor(c.model)
+		if ok != c.known || p.InputPricePerMillion != c.in || p.OutputPricePerMillion != c.out {
+			t.Errorf("PricingFor(%q) = %+v, %v; want in=%v out=%v known=%v", c.model, p, ok, c.in, c.out, c.known)
+		}
+	}
 }
