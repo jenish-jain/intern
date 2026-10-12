@@ -26,6 +26,12 @@ func (e *NeedsHumanError) Error() string {
 	return "needs human input: " + strings.Join(e.Questions, "; ")
 }
 
+// Commit identity for intern's commits.
+const (
+	commitAuthorName  = "AI Intern"
+	commitAuthorEmail = "ai-intern@example.com"
+)
+
 // errNoChanges means the runner finished without changing anything.
 var errNoChanges = errors.New("no effective changes were produced for this ticket")
 
@@ -188,8 +194,12 @@ func (c *Coordinator) commitStaged(ctx context.Context, repoRoot, message string
 	if strings.TrimSpace(out) != "" {
 		return fmt.Errorf("git diff --cached: %w: %s", err, out)
 	}
-	if err := c.Repository.Commit(ctx, message); err != nil {
-		return fmt.Errorf("commit: %w", err)
+	// The git CLI commits in whichever checkout repoRoot is: the main clone
+	// or a ticket's worktree.
+	if out, err := runCommandCapture(ctx, repoRoot, "git",
+		"-c", "user.name="+commitAuthorName, "-c", "user.email="+commitAuthorEmail,
+		"commit", "-q", "--no-verify", "-m", message); err != nil {
+		return fmt.Errorf("commit: %w: %s", err, out)
 	}
 	return nil
 }

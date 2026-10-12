@@ -42,6 +42,8 @@ type Coordinator struct {
 	// repoMu serializes use of the shared clone between the poll loop and
 	// request-driven work (Slack asks, architect conversations).
 	repoMu sync.Mutex
+	// remoteMu serializes pushes and PR creation from parallel tickets.
+	remoteMu sync.Mutex
 
 	ticketMetricsMu sync.Mutex
 	ticketMetrics   map[string]*TicketMetrics // last-known metrics per ticket key, for request-driven callers (see LastTicketMetrics)
@@ -282,20 +284,17 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	c.setStatus(ctx, key, ticketing.StatusInProgress)
 
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
-	logger.Info("Creating branch", "branch", branchName)
-	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
+	logger.Info("Creating branch in a dedicated worktree", "branch", branchName)
+	repoRoot, cleanup, err := c.addWorktree(ctx, branchName)
+	if err != nil {
 		return errors.NewRepoBranchError(err, branchName, "create").
 			WithContext("ticket_key", key)
 	}
-	if err := c.Repository.SwitchBranch(ctx, branchName); err != nil {
-		return errors.NewRepoBranchError(err, branchName, "switch to").
-			WithContext("ticket_key", key)
-	}
+	defer cleanup()
 	if err := checkContext(ctx, key, "after branch setup"); err != nil {
 		return err
 	}
 
-	repoRoot := c.RepoPaths.Root()
 	base, err := gate.HeadSHA(ctx, repoRoot)
 	if err != nil {
 		return fmt.Errorf("read base commit: %w", err)
@@ -340,6 +339,10 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		return nil
 	}
 
+	// Pushes and PR creation share the main clone's git storage and the
+	// GitHub client; serialize them across parallel tickets.
+	c.remoteMu.Lock()
+	defer c.remoteMu.Unlock()
 	pushErr, pushAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		return MakeTransient(c.Repository.Push(ctx, branchName))
 	})
