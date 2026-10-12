@@ -140,11 +140,11 @@ func TestCenterText(t *testing.T) {
 
 func TestFormatMetricLine(t *testing.T) {
 	tests := []struct {
-		name     string
+		name       string
 		metricName string
-		value    string
-		width    int
-		expected int // Expected total length
+		value      string
+		width      int
+		expected   int // Expected total length
 	}{
 		{
 			name:       "normal metric",

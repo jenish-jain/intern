@@ -104,6 +104,9 @@ type Config struct {
 	TestEnabled     bool   // run the tester persona after approval
 	AutoMerge       bool   // merge when the flow passes and CI is green
 	MergeMethod     string // "squash" (default), "merge" or "rebase"
+	// EpicReview runs the architect when an epic completes, to check the
+	// merged code against the architecture (default true).
+	EpicReview bool
 
 	// VerifyFixAttempts is how many times a failing verify is handed back
 	// to the runner to fix. Defaults to SELF_HEAL_MAX_ATTEMPTS when
@@ -201,6 +204,7 @@ func LoadConfig() (*Config, error) {
 		TestEnabled:     viper.GetBool("TEST_ENABLED"),
 		AutoMerge:       viper.GetBool("AUTO_MERGE"),
 		MergeMethod:     viper.GetString("MERGE_METHOD"),
+		EpicReview:      !viper.IsSet("EPIC_REVIEW") || viper.GetBool("EPIC_REVIEW"),
 
 		VerifyFixAttempts: viper.GetInt("VERIFY_FIX_ATTEMPTS"),
 		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),

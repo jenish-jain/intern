@@ -117,3 +117,13 @@ type ChannelNotifier struct {
 func (n *ChannelNotifier) Notify(ctx context.Context, text string) error {
 	return n.Client.PostToChannel(ctx, n.Channel, text)
 }
+
+// NotifyConversation replies in an architect conversation's thread.
+func (n *ChannelNotifier) NotifyConversation(ctx context.Context, convID, text string) error {
+	channel, ts, ok := parseConversationID(convID)
+	if !ok {
+		return fmt.Errorf("not a Slack conversation ID: %q", convID)
+	}
+	_, _, err := n.Client.api.PostMessageContext(ctx, channel, slackapi.MsgOptionText(text, false), slackapi.MsgOptionTS(ts))
+	return err
+}

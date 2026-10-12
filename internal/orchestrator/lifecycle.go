@@ -150,6 +150,9 @@ func (c *Coordinator) reconcileMerged(ctx context.Context) {
 		logger.Info("PR merged; moving ticket to Done", "ticket", key)
 		c.setStatus(ctx, key, ticketing.StatusDone)
 	}
+	if len(merged) > 0 {
+		c.checkEpics(ctx)
+	}
 }
 
 // agentStateDir holds intern's own files inside the target clone (journal,

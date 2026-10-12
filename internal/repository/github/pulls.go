@@ -3,8 +3,10 @@ package github
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"intern/internal/repository"
 
@@ -253,4 +255,60 @@ func (c *githubClient) MergePR(ctx context.Context, prURL, method string) error 
 	// Branch cleanup is best-effort; the merge already happened.
 	_, _ = c.ghClient.Git.DeleteRef(ctx, c.owner, c.repo, "heads/"+pr.GetHead().GetRef())
 	return nil
+}
+
+// selfLogin returns the token owner's login, looked up once.
+func (c *githubClient) selfLogin(ctx context.Context) string {
+	c.loginOnce.Do(func() {
+		if u, _, err := c.ghClient.Users.Get(ctx, ""); err == nil {
+			c.login = u.GetLogin()
+		}
+	})
+	return c.login
+}
+
+func (c *githubClient) ListComments(ctx context.Context, prURL string, since time.Time) ([]repository.PRComment, error) {
+	num, err := prNumber(prURL)
+	if err != nil {
+		return nil, err
+	}
+	self := c.selfLogin(ctx)
+	type stamped struct {
+		at time.Time
+		c  repository.PRComment
+	}
+	var all []stamped
+
+	issueComments, _, err := c.ghClient.Issues.ListComments(ctx, c.owner, c.repo, num, &gh.IssueListCommentsOptions{
+		Since: &since, ListOptions: gh.ListOptions{PerPage: 100},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list PR comments: %w", err)
+	}
+	for _, ic := range issueComments {
+		if ic.GetUser().GetLogin() == self || ic.GetCreatedAt().Before(since) {
+			continue
+		}
+		all = append(all, stamped{ic.GetCreatedAt().Time, repository.PRComment{Author: ic.GetUser().GetLogin(), Body: ic.GetBody()}})
+	}
+	reviewComments, _, err := c.ghClient.PullRequests.ListComments(ctx, c.owner, c.repo, num, &gh.PullRequestListCommentsOptions{
+		Since: since, ListOptions: gh.ListOptions{PerPage: 100},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list PR review comments: %w", err)
+	}
+	for _, rc := range reviewComments {
+		if rc.GetUser().GetLogin() == self || rc.GetCreatedAt().Before(since) {
+			continue
+		}
+		all = append(all, stamped{rc.GetCreatedAt().Time, repository.PRComment{
+			Author: rc.GetUser().GetLogin(), Body: rc.GetBody(), Path: rc.GetPath(), Line: rc.GetLine(),
+		}})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].at.Before(all[j].at) })
+	out := make([]repository.PRComment, len(all))
+	for i, s := range all {
+		out[i] = s.c
+	}
+	return out, nil
 }

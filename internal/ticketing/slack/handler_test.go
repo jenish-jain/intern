@@ -70,8 +70,10 @@ func (b *fakeBackend) ProcessTicket(_ context.Context, key, summary, _ string) e
 	b.processed = append(b.processed, key+": "+summary)
 	return nil
 }
-func (b *fakeBackend) LastTicketMetrics(string) (*orchestrator.TicketMetrics, bool) { return nil, false }
-func (b *fakeBackend) PRURLFor(string) string                                       { return "https://github.com/o/r/pull/1" }
+func (b *fakeBackend) LastTicketMetrics(string) (*orchestrator.TicketMetrics, bool) {
+	return nil, false
+}
+func (b *fakeBackend) PRURLFor(string) string { return "https://github.com/o/r/pull/1" }
 func (b *fakeBackend) Converse(_ context.Context, id, msg string) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -113,7 +115,7 @@ func TestHandler_PlanPrefixStartsConversationAndRepliesContinueIt(t *testing.T) 
 	ctx := context.Background()
 
 	h.handleCallback(ctx, mention("CGEN", "100.1", "", "<@UBOT> plan: a notes app"))
-	if len(be.conversed) != 1 || be.conversed[0] != "conv-CGEN-1001: a notes app" {
+	if len(be.conversed) != 1 || be.conversed[0] != "conv-CGEN-100.1: a notes app" {
 		t.Fatalf("conversed = %v", be.conversed)
 	}
 	texts := fs.texts()
@@ -126,7 +128,7 @@ func TestHandler_PlanPrefixStartsConversationAndRepliesContinueIt(t *testing.T) 
 
 	// A plain reply in that thread (no mention) continues the conversation.
 	h.handleCallback(ctx, message("CGEN", "channel", "101.1", "100.1", "No sharing."))
-	if len(be.conversed) != 2 || be.conversed[1] != "conv-CGEN-1001: No sharing." {
+	if len(be.conversed) != 2 || be.conversed[1] != "conv-CGEN-100.1: No sharing." {
 		t.Errorf("thread reply not routed: %v", be.conversed)
 	}
 	// A reply that mentions the bot is handled by its app_mention event,
@@ -136,7 +138,7 @@ func TestHandler_PlanPrefixStartsConversationAndRepliesContinueIt(t *testing.T) 
 		t.Errorf("mention duplicated through message event: %v", be.conversed)
 	}
 	h.handleCallback(ctx, mention("CGEN", "102.1", "100.1", "<@UBOT> approve"))
-	if be.conversed[2] != "conv-CGEN-1001: approve" {
+	if be.conversed[2] != "conv-CGEN-100.1: approve" {
 		t.Errorf("mention in thread not routed: %v", be.conversed)
 	}
 	if len(be.processed) != 0 {
@@ -185,5 +187,19 @@ func TestChannelNotifier(t *testing.T) {
 	}
 	if fs.posts[0].channel != "CNOTIFY" || fs.posts[0].threadTS != "" {
 		t.Errorf("post = %+v", fs.posts[0])
+	}
+}
+
+func TestChannelNotifier_ConversationThread(t *testing.T) {
+	h, fs, _ := newTestHandler(t, HandlerOptions{})
+	n := &ChannelNotifier{Client: h.client, Channel: "CNOTIFY"}
+	if err := n.NotifyConversation(context.Background(), conversationID("CARCH", "123.456"), "epic done"); err != nil {
+		t.Fatal(err)
+	}
+	if fs.posts[0].channel != "CARCH" || fs.posts[0].threadTS != "123.456" {
+		t.Errorf("post = %+v", fs.posts[0])
+	}
+	if err := n.NotifyConversation(context.Background(), "not-a-conv", "x"); err == nil {
+		t.Error("expected error for a non-Slack ID")
 	}
 }

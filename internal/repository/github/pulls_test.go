@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"intern/internal/repository"
 
@@ -82,6 +83,14 @@ func (f *fakeGitHub) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "DELETE" && strings.HasPrefix(p, "/repos/o/r/issues/7/labels/"):
 		w.WriteHeader(404)
 		_, _ = io.WriteString(w, `{"message":"Label does not exist"}`)
+	case r.Method == "GET" && p == "/user":
+		_, _ = io.WriteString(w, `{"login":"intern-bot"}`)
+	case r.Method == "GET" && p == "/repos/o/r/issues/7/comments":
+		_, _ = io.WriteString(w, `[{"user":{"login":"intern-bot"},"body":"mine","created_at":"2026-10-01T10:00:00Z"},
+			{"user":{"login":"alice"},"body":"Use v3.","created_at":"2026-10-01T12:00:00Z"}]`)
+	case r.Method == "GET" && p == "/repos/o/r/pulls/7/comments":
+		_, _ = io.WriteString(w, `[{"user":{"login":"bob"},"body":"Rename.","path":"a.go","line":4,"created_at":"2026-10-01T11:00:00Z"},
+			{"user":{"login":"alice"},"body":"old","path":"a.go","line":1,"created_at":"2026-09-01T11:00:00Z"}]`)
 	case r.Method == "PUT" && p == "/repos/o/r/pulls/7/merge":
 		_, _ = io.WriteString(w, `{"merged":true,"message":"Pull Request successfully merged"}`)
 	case r.Method == "DELETE" && p == "/repos/o/r/git/refs/heads/feature/P-1":
@@ -269,5 +278,17 @@ func TestMergePR_Conflict(t *testing.T) {
 	}
 	if len(f.find("PUT", "/pulls/7/merge")) != 0 {
 		t.Error("should not attempt a merge GitHub already reports as conflicting")
+	}
+}
+
+func TestListComments_ExcludesSelfAndOld(t *testing.T) {
+	c := newFakeClient(t, &fakeGitHub{})
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	got, err := c.ListComments(context.Background(), prURL, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Author != "bob" || got[0].Path != "a.go" || got[0].Line != 4 || got[1].Body != "Use v3." {
+		t.Errorf("comments = %+v", got)
 	}
 }

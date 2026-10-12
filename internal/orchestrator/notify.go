@@ -12,6 +12,25 @@ type Notifier interface {
 	Notify(ctx context.Context, text string) error
 }
 
+// ThreadNotifier is a Notifier that can also reply in an architect
+// conversation's thread.
+type ThreadNotifier interface {
+	NotifyConversation(ctx context.Context, convID, text string) error
+}
+
+// notifyConversation replies in the conversation's thread when the
+// notifier supports it, and falls back to the channel otherwise.
+func (c *Coordinator) notifyConversation(ctx context.Context, convID, text string) {
+	if tn, ok := c.Notifier.(ThreadNotifier); ok && convID != "" {
+		err := tn.NotifyConversation(ctx, convID, text)
+		if err == nil {
+			return
+		}
+		logger.Warn("Failed to post in conversation thread", "conversation", convID, "error", err)
+	}
+	c.notify(ctx, text)
+}
+
 // notify sends text through the configured notifier, if any.
 func (c *Coordinator) notify(ctx context.Context, text string) {
 	if c.Notifier == nil {

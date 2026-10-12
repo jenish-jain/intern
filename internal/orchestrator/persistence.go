@@ -24,14 +24,14 @@ type RunMetadata struct {
 
 // SummaryMetrics contains the aggregated metrics for the entire run.
 type SummaryMetrics struct {
-	TicketsProcessed int     `json:"tickets_processed"`
-	PRsCreated       int     `json:"prs_created"`
-	TicketsFailed    int     `json:"tickets_failed"`
-	TotalCost        float64 `json:"total_cost"`
-	TotalInputTokens int64   `json:"total_input_tokens"`
-	TotalOutputTokens int64  `json:"total_output_tokens"`
-	SmartContextUsed  int64  `json:"smart_context_used"`
-	SimpleContextUsed int64  `json:"simple_context_used"`
+	TicketsProcessed  int     `json:"tickets_processed"`
+	PRsCreated        int     `json:"prs_created"`
+	TicketsFailed     int     `json:"tickets_failed"`
+	TotalCost         float64 `json:"total_cost"`
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	SmartContextUsed  int64   `json:"smart_context_used"`
+	SimpleContextUsed int64   `json:"simple_context_used"`
 	AvgCostPerTicket  float64 `json:"avg_cost_per_ticket"`
 	AvgTimePerTicket  float64 `json:"avg_time_per_ticket_seconds"`
 	TotalFilesChanged int64   `json:"total_files_changed"`

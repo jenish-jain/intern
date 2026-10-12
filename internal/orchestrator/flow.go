@@ -46,6 +46,7 @@ type Flow struct {
 	MergeErrors  int       `json:"merge_errors,omitempty"` // consecutive unexplained merge failures
 	Feedback     string    `json:"feedback,omitempty"`     // input for the next developer round
 	Reason       string    `json:"reason,omitempty"`       // why a human is needed
+	EscalatedAt  time.Time `json:"escalated_at,omitempty"`
 	CostUSD      float64   `json:"cost_usd"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -117,6 +118,7 @@ func (c *Coordinator) moveFlow(ctx context.Context, f *Flow, to Stage) {
 // the ticket.
 func (c *Coordinator) escalate(ctx context.Context, f *Flow, reason string) {
 	f.Reason = reason
+	f.EscalatedAt = time.Now()
 	msg := fmt.Sprintf("I need a human to look at this PR: %s\n\nPush fixes or comment, then add the `%s` label to send it back to review.", reason, LabelResume)
 	if err := c.Repository.CommentPR(ctx, f.PRURL, msg); err != nil {
 		logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", err)
@@ -183,6 +185,13 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 		if pr.HasLabel(LabelResume) {
 			_ = c.Repository.RemoveLabel(ctx, f.PRURL, LabelResume)
 			f.ReviewRounds, f.FixRounds, f.Reason, f.Feedback = 0, 0, "", ""
+			// What people wrote on the PR while it waited is the most
+			// direct guidance the developer can get.
+			if fb := c.humanFeedback(ctx, f); fb != "" {
+				f.Feedback = fb
+				c.moveFlow(ctx, f, StageChangesRequested)
+				return nil
+			}
 			c.moveFlow(ctx, f, c.firstStage())
 		}
 		return nil
@@ -468,4 +477,33 @@ func (c *Coordinator) runMerge(ctx context.Context, f *Flow, pr repository.PRSta
 		c.State.SaveFlow(*f)
 		return err
 	}
+}
+
+// humanFeedback collects PR comments people left since the flow was
+// escalated, formatted for the developer. Empty when there are none.
+func (c *Coordinator) humanFeedback(ctx context.Context, f *Flow) string {
+	since := f.EscalatedAt
+	if since.IsZero() {
+		since = f.UpdatedAt
+	}
+	comments, err := c.Repository.ListComments(ctx, f.PRURL, since)
+	if err != nil {
+		if err != repository.ErrUnsupported {
+			logger.Warn("Could not read PR comments", "pr", f.PRURL, "error", err)
+		}
+		return ""
+	}
+	if len(comments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("A person reviewed this pull request and left the comments below. Address every one of them, and make sure verify still passes.\n")
+	for _, cm := range comments {
+		if cm.Path != "" {
+			fmt.Fprintf(&b, "\n- %s on %s:%d: %s", cm.Author, cm.Path, cm.Line, cm.Body)
+		} else {
+			fmt.Fprintf(&b, "\n- %s: %s", cm.Author, cm.Body)
+		}
+	}
+	return b.String()
 }

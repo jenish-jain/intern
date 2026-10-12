@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"intern/internal/repository"
@@ -25,6 +26,9 @@ type githubClient struct {
 	token    string                     // Store the token for git operations
 	repoURL  string                     // Optional: override repository URL for testing
 	paths    *repository.RepositoryPath // Centralized path management
+
+	loginOnce sync.Once
+	login     string // token owner, for filtering our own comments
 }
 
 func NewClient(token, owner, repo string, paths *repository.RepositoryPath) repository.RepositoryClient {

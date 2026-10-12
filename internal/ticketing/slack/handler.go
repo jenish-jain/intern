@@ -276,7 +276,21 @@ func (h *Handler) costSuffix(key string) string {
 
 // conversationID identifies an architect conversation by its thread.
 func conversationID(channel, threadTS string) string {
-	return "conv-" + channel + "-" + strings.ReplaceAll(threadTS, ".", "")
+	return "conv-" + channel + "-" + threadTS
+}
+
+// parseConversationID recovers the channel and thread from an ID made by
+// conversationID.
+func parseConversationID(id string) (channel, threadTS string, ok bool) {
+	rest, found := strings.CutPrefix(id, "conv-")
+	if !found {
+		return "", "", false
+	}
+	i := strings.LastIndex(rest, "-")
+	if i <= 0 || i == len(rest)-1 {
+		return "", "", false
+	}
+	return rest[:i], rest[i+1:], true
 }
 
 func firstNonEmpty(vals ...string) string {

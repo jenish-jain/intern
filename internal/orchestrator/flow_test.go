@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"intern/internal/config"
 	"intern/internal/repository"
@@ -18,18 +19,25 @@ import (
 // flowRepo is a git-backed repository client with scripted PR state.
 type flowRepo struct {
 	gitRepoClient
-	mu       sync.Mutex
-	pr       repository.PRState
-	reviews  []string
-	comments []string
-	pushes   []string
-	merges   []string
-	mergeErr error
-	prHeads  []string // head branches of PRs opened through CreatePullRequest
+	mu            sync.Mutex
+	pr            repository.PRState
+	reviews       []string
+	comments      []string
+	pushes        []string
+	merges        []string
+	mergeErr      error
+	prHeads       []string // head branches of PRs opened through CreatePullRequest
+	humanComments []repository.PRComment
+}
+
+func (r *flowRepo) ListComments(context.Context, string, time.Time) ([]repository.PRComment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.humanComments, nil
 }
 
 func (r *flowRepo) CreateBranch(_ context.Context, b string) error { return r.git("branch", "-f", b) }
-func (r *flowRepo) SyncWithRemote(context.Context) error         { return nil }
+func (r *flowRepo) SyncWithRemote(context.Context) error           { return nil }
 func (r *flowRepo) CreatePullRequest(_ context.Context, base, head, title, body string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -507,5 +515,40 @@ func TestFlow_NotifiesOnMergeAndEscalation(t *testing.T) {
 	c.escalate(ctx, &f, "tests keep failing")
 	if len(n.msgs) != 2 || !strings.Contains(n.msgs[1], "P-2 needs a human: tests keep failing") {
 		t.Errorf("notifications = %v", n.msgs)
+	}
+}
+
+func TestFlow_ResumeSendsHumanCommentsToDeveloper(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleDeveloper: {func(j runner.Job) runner.Result {
+			writeFile(fx, j.Workdir, "app.txt", "per human\n")
+			return runner.Result{Status: runner.StatusDone, Summary: "applied the human's guidance"}
+		}},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{ReviewEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	f := c.State.ListFlows()[0]
+	c.escalate(ctx, &f, "stuck")
+
+	repo.humanComments = []repository.PRComment{
+		{Author: "alice", Body: "Use the v3 API instead."},
+		{Author: "alice", Body: "Rename this.", Path: "app.txt", Line: 1},
+	}
+	repo.pr.Labels = append(repo.pr.Labels, LabelResume)
+	c.advanceFlows(ctx)
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested {
+		t.Fatalf("resume with comments should go to the developer, got %s", f.Stage)
+	}
+	for _, want := range []string{"alice: Use the v3 API instead.", "alice on app.txt:1: Rename this."} {
+		if !strings.Contains(f.Feedback, want) {
+			t.Errorf("feedback missing %q:\n%s", want, f.Feedback)
+		}
+	}
+	c.advanceFlows(ctx)
+	if dev := rr.jobs[len(rr.jobs)-1]; !strings.Contains(dev.Feedback, "v3 API") {
+		t.Errorf("developer did not receive the human feedback: %q", dev.Feedback)
 	}
 }

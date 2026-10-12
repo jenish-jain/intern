@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 type RepositoryClient interface {
@@ -113,6 +114,14 @@ type ReviewComment struct {
 	Body string
 }
 
+// PRComment is a comment a person left on a PR.
+type PRComment struct {
+	Author string
+	Body   string
+	Path   string // set for inline review comments
+	Line   int
+}
+
 // PullRequests is implemented by VCS backends that support the review,
 // test and merge stages. It is optional; RepositoryService returns
 // ErrUnsupported when the backend doesn't implement it.
@@ -125,6 +134,9 @@ type PullRequests interface {
 	// ReviewPR posts a review (as a comment, since a bot can't approve
 	// its own PR) with optional inline comments.
 	ReviewPR(ctx context.Context, prURL, body string, comments []ReviewComment) error
+	// ListComments returns comments on the PR since a time, excluding the
+	// agent's own, oldest first.
+	ListComments(ctx context.Context, prURL string, since time.Time) ([]PRComment, error)
 	AddLabels(ctx context.Context, prURL string, labels ...string) error
 	RemoveLabel(ctx context.Context, prURL, label string) error
 	// MergePR merges with method "merge", "squash" or "rebase" and
@@ -201,4 +213,12 @@ func (r *RepositoryService) MergePR(ctx context.Context, prURL, method string) e
 		return err
 	}
 	return p.MergePR(ctx, prURL, method)
+}
+
+func (r *RepositoryService) ListComments(ctx context.Context, prURL string, since time.Time) ([]PRComment, error) {
+	p, err := r.prs()
+	if err != nil {
+		return nil, err
+	}
+	return p.ListComments(ctx, prURL, since)
 }

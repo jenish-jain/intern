@@ -66,6 +66,11 @@ func planBranch(convID string, round int) string {
 func (c *Coordinator) Converse(ctx context.Context, convID, message string) (string, error) {
 	c.repoMu.Lock()
 	defer c.repoMu.Unlock()
+	return c.converse(ctx, convID, message)
+}
+
+// converse is Converse for callers that already hold the repository lock.
+func (c *Coordinator) converse(ctx context.Context, convID, message string) (string, error) {
 	defer c.returnToBase(ctx)
 
 	conv, ok := c.State.GetConversation(convID)
@@ -248,6 +253,8 @@ func (c *Coordinator) approvePlan(ctx context.Context, conv *Conversation) (stri
 	conv.Stage = ConvApproved
 	conv.UpdatedAt = time.Now()
 	c.State.SaveConversation(*conv)
+	// The approving thread is where epic milestones are reported.
+	c.State.SetProjectConversation(conv.ID)
 
 	var b strings.Builder
 	switch len(res.Created) {
