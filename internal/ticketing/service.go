@@ -59,3 +59,11 @@ func (t *Service) LinkBlocks(ctx context.Context, blockerKey, blockedKey string)
 	}
 	return w.LinkBlocks(ctx, blockerKey, blockedKey)
 }
+
+func (t *Service) FindUserID(ctx context.Context, query string) (string, error) {
+	w, err := t.workflow()
+	if err != nil {
+		return "", err
+	}
+	return w.FindUserID(ctx, query)
+}

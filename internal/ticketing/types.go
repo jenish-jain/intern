@@ -52,6 +52,8 @@ type NewTicket struct {
 	Description string
 	IssueType   string // e.g. "Task", "Story"; defaults to "Task"
 	Labels      []string
+	// AssigneeID is the backend's user ID (a JIRA accountId).
+	AssigneeID string
 }
 
 // Blocker is a ticket that must finish before another can start.

@@ -22,6 +22,10 @@ type Config struct {
 	JiraAPIToken    string
 	JiraProject     string
 	JiraTransitions map[string]string
+	// JiraAgentAccountID is the agent's JIRA accountId, used as assignee
+	// for imported tickets. Looked up from AGENT_USERNAME when empty.
+	JiraAgentAccountID string
+	JiraIssueType      string // issue type for imported tickets (default "Task")
 
 	SlackBotToken      string
 	SlackSigningSecret string
@@ -117,10 +121,12 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{
 		TicketingMode: viper.GetString("TICKETING_MODE"),
 
-		JiraURL:      viper.GetString("JIRA_URL"),
-		JiraEmail:    viper.GetString("JIRA_EMAIL"),
-		JiraAPIToken: viper.GetString("JIRA_API_TOKEN"),
-		JiraProject:  viper.GetString("JIRA_PROJECT_KEY"),
+		JiraURL:            viper.GetString("JIRA_URL"),
+		JiraEmail:          viper.GetString("JIRA_EMAIL"),
+		JiraAPIToken:       viper.GetString("JIRA_API_TOKEN"),
+		JiraProject:        viper.GetString("JIRA_PROJECT_KEY"),
+		JiraAgentAccountID: viper.GetString("JIRA_AGENT_ACCOUNT_ID"),
+		JiraIssueType:      viper.GetString("JIRA_ISSUE_TYPE"),
 		JiraTransitions: map[string]string{
 			"To Do":       viper.GetString("JIRA_TRANSITION_TO_DO"),
 			"In Progress": viper.GetString("JIRA_TRANSITION_IN_PROGRESS"),

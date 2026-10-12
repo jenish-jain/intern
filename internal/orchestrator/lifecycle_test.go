@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,9 +20,12 @@ import (
 
 // fakeTicketing records status transitions and comments.
 type fakeTicketing struct {
-	mu          sync.Mutex
-	transitions []string // "KEY:Status"
-	comments    map[string][]string
+	mu           sync.Mutex
+	transitions  []string // "KEY:Status"
+	comments     map[string][]string
+	created      []ticketing.NewTicket
+	links        []string // "BLOCKER>BLOCKED"
+	failCreateAt int      // 1-based CreateTicket call that fails (0 = never)
 }
 
 func (f *fakeTicketing) HealthCheck(context.Context) error { return nil }
@@ -46,10 +50,24 @@ func (f *fakeTicketing) AddComment(_ context.Context, key, body string) error {
 	f.comments[key] = append(f.comments[key], body)
 	return nil
 }
-func (f *fakeTicketing) CreateTicket(context.Context, ticketing.NewTicket) (string, error) {
-	return "", nil
+func (f *fakeTicketing) CreateTicket(_ context.Context, nt ticketing.NewTicket) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failCreateAt > 0 && len(f.created)+1 == f.failCreateAt {
+		return "", errors.New("jira unavailable")
+	}
+	f.created = append(f.created, nt)
+	return fmt.Sprintf("P-%d", 100+len(f.created)), nil
 }
-func (f *fakeTicketing) LinkBlocks(context.Context, string, string) error { return nil }
+func (f *fakeTicketing) LinkBlocks(_ context.Context, blocker, blocked string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.links = append(f.links, blocker+">"+blocked)
+	return nil
+}
+func (f *fakeTicketing) FindUserID(_ context.Context, q string) (string, error) {
+	return "acct-" + q, nil
+}
 
 // fakeRepo implements only IsPRMerged; other methods panic if called.
 type fakeRepo struct {

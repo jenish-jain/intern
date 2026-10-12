@@ -22,6 +22,9 @@ type Workflow interface {
 	CreateTicket(ctx context.Context, t NewTicket) (string, error)
 	// LinkBlocks records that blockerKey blocks blockedKey.
 	LinkBlocks(ctx context.Context, blockerKey, blockedKey string) error
+	// FindUserID resolves a username, email or account ID to the
+	// backend's user ID.
+	FindUserID(ctx context.Context, query string) (string, error)
 }
 
 // ErrUnsupported is returned by Service when the backend lacks an

@@ -105,6 +105,9 @@ func (c *client) CreateTicket(ctx context.Context, t ticketing.NewTicket) (strin
 	if len(t.Labels) > 0 {
 		fields["labels"] = t.Labels
 	}
+	if t.AssigneeID != "" {
+		fields["assignee"] = map[string]string{"accountId": t.AssigneeID}
+	}
 	resp, err := c.makeRequest(ctx, "POST", "/rest/api/3/issue", map[string]any{"fields": fields})
 	if err != nil {
 		return "", fmt.Errorf("create issue: %w", err)
@@ -168,4 +171,35 @@ func textToADF(text string) map[string]any {
 		paragraphs = []any{}
 	}
 	return map[string]any{"type": "doc", "version": 1, "content": paragraphs}
+}
+
+// FindUserID returns the accountId of the single user matching query (a
+// display name, email or accountId).
+func (c *client) FindUserID(ctx context.Context, query string) (string, error) {
+	endpoint := "/rest/api/3/user/search?query=" + url.QueryEscape(query)
+	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("search users: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", c.handleErrorResponse(resp)
+	}
+	var users []struct {
+		AccountID    string `json:"accountId"`
+		DisplayName  string `json:"displayName"`
+		EmailAddress string `json:"emailAddress"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return "", fmt.Errorf("decode users: %w", err)
+	}
+	for _, u := range users {
+		if u.AccountID == query || strings.EqualFold(u.DisplayName, query) || strings.EqualFold(u.EmailAddress, query) {
+			return u.AccountID, nil
+		}
+	}
+	if len(users) == 1 {
+		return users[0].AccountID, nil
+	}
+	return "", fmt.Errorf("no single JIRA user matches %q (%d candidates)", query, len(users))
 }

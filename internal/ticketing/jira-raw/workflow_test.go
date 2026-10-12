@@ -198,3 +198,29 @@ func TestGetTickets_ParsesBlockers(t *testing.T) {
 		t.Errorf("OpenBlockers = %v, want [P-2]", open)
 	}
 }
+
+func TestFindUserID(t *testing.T) {
+	c, reqs := newTestClient(t, func(r *http.Request) (int, string) {
+		return 200, `[{"accountId":"a1","displayName":"AI Intern"},{"accountId":"a2","displayName":"AI Intern Bot"}]`
+	})
+	id, err := c.FindUserID(context.Background(), "ai intern")
+	if err != nil || id != "a1" {
+		t.Fatalf("FindUserID = %q, %v", id, err)
+	}
+	if !strings.HasPrefix((*reqs)[0].path, "/rest/api/3/user/search") {
+		t.Errorf("path = %s", (*reqs)[0].path)
+	}
+	if _, err := c.FindUserID(context.Background(), "nobody"); err == nil {
+		t.Error("ambiguous match should fail")
+	}
+}
+
+func TestCreateTicket_Assignee(t *testing.T) {
+	c, reqs := newTestClient(t, func(r *http.Request) (int, string) { return 201, `{"key":"P-1"}` })
+	if _, err := c.CreateTicket(context.Background(), ticketing.NewTicket{Project: "P", Summary: "s", AssigneeID: "a1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*reqs)[0].body["fields"].(map[string]any)["assignee"].(map[string]any)["accountId"]; got != "a1" {
+		t.Errorf("assignee = %v", got)
+	}
+}

@@ -23,9 +23,12 @@ type State struct {
 	FailureFingerprints map[string]string `json:"failure_fingerprints,omitempty"`
 	// Flows tracks tickets whose PR is open and moving through review,
 	// test and merge.
-	Flows    map[string]*Flow `json:"flows,omitempty"`
-	mu       sync.Mutex       `json:"-"`
-	filePath string           `json:"-"`
+	Flows map[string]*Flow `json:"flows,omitempty"`
+	// BacklogKeys maps backlog ticket IDs to the ticket keys created for
+	// them, so re-importing a revised backlog never duplicates tickets.
+	BacklogKeys map[string]string `json:"backlog_keys,omitempty"`
+	mu          sync.Mutex        `json:"-"`
+	filePath    string            `json:"-"`
 }
 
 func NewState(filePath string) *State {
@@ -163,6 +166,7 @@ func (s *State) Load() error {
 		Failures            map[string]int    `json:"failures"`
 		FailureFingerprints map[string]string `json:"failure_fingerprints"`
 		Flows               map[string]*Flow  `json:"flows"`
+		BacklogKeys         map[string]string `json:"backlog_keys"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -182,6 +186,7 @@ func (s *State) Load() error {
 		s.Failures = make(map[string]int)
 	}
 	s.Flows = temp.Flows
+	s.BacklogKeys = temp.BacklogKeys
 	if temp.FailureFingerprints != nil {
 		s.FailureFingerprints = temp.FailureFingerprints
 	} else {
@@ -228,4 +233,28 @@ func (s *State) ListFlows() []Flow {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
+}
+
+// BacklogKeyMap returns a copy of the backlog ID to ticket key mapping.
+func (s *State) BacklogKeyMap() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]string, len(s.BacklogKeys))
+	for k, v := range s.BacklogKeys {
+		out[k] = v
+	}
+	return out
+}
+
+// SetBacklogKey records the ticket key created for a backlog ID.
+func (s *State) SetBacklogKey(id, key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.BacklogKeys == nil {
+		s.BacklogKeys = make(map[string]string)
+	}
+	s.BacklogKeys[id] = key
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err, "backlog_id", id)
+	}
 }
