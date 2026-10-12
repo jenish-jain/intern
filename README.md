@@ -4,6 +4,15 @@
 
 An autonomous Go-based engineering assistant that reads JIRA tickets assigned to it, analyzes the target repository, generates and applies code changes using an AI provider (Anthropic Claude or local LLMs via Ollama), opens a GitHub Pull Request, and updates the JIRA ticket status.
 
+## Team mode: from a PRD to merged code
+
+Intern can run as a small autonomous software team. A product owner shares requirements with the **architect** in Slack and approves the plan it proposes. The architect writes the PRD, architecture, decision records and a JIRA backlog of small, testable tickets. **Developers** build tickets in parallel in their own git worktrees, a **reviewer** reviews each PR, a **tester** writes acceptance tests from the ticket's criteria, and intern merges when CI passes. People answer questions, approve plans, and give feedback on each finished epic.
+
+- [docs/TEAM_MODE.md](docs/TEAM_MODE.md): the end-to-end workflow, configuration and Slack setup
+- [docs/RUNNERS.md](docs/RUNNERS.md): the Claude Code runner, personas, sandboxes and the `.intern/project.yaml` contract
+
+The single-shot engine described below remains available as `AI_RUNNER=legacy` (the default), including local models through Ollama.
+
 ## Overview
 
 - Ticketing integration (JIRA) to fetch and update tickets
