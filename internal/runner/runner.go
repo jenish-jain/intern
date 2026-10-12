@@ -36,6 +36,9 @@ type Job struct {
 	// Workdir is the repository checkout the runner works in, already on
 	// the ticket's branch.
 	Workdir string
+	// BaseBranch is the branch the work will merge into. Reviewers and
+	// testers diff against it.
+	BaseBranch string
 	// Feedback carries extra input for a follow-up run: review comments,
 	// failing verify output, or a human's answer to a question.
 	Feedback string

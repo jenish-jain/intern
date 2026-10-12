@@ -445,3 +445,19 @@ func TestSplitList(t *testing.T) {
 		t.Error("empty input should be nil")
 	}
 }
+
+func TestConfig_Validate_FlowStages(t *testing.T) {
+	cfg := validConfig()
+	cfg.ReviewEnabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("review with legacy runner should fail, got %v", err)
+	}
+	cfg.AIRunner = "claude-code"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("review with claude-code should pass: %v", err)
+	}
+	cfg.MergeMethod = "octopus"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MERGE_METHOD") {
+		t.Errorf("bad merge method should fail, got %v", err)
+	}
+}

@@ -88,6 +88,13 @@ type Config struct {
 	SandboxNetwork string   // docker --network (default "bridge")
 	SandboxPassEnv []string // extra host env vars passed to a local sandbox
 
+	// Review/test/merge flow after a PR opens.
+	ReviewEnabled   bool   // run the reviewer persona on each PR
+	MaxReviewRounds int    // review rounds before escalating to a human (default 2)
+	TestEnabled     bool   // run the tester persona after approval
+	AutoMerge       bool   // merge when the flow passes and CI is green
+	MergeMethod     string // "squash" (default), "merge" or "rebase"
+
 	// VerifyFixAttempts is how many times a failing verify is handed back
 	// to the runner to fix. Defaults to SELF_HEAL_MAX_ATTEMPTS when
 	// SELF_HEAL_ENABLED is set, otherwise 0.
@@ -172,6 +179,12 @@ func LoadConfig() (*Config, error) {
 		SandboxNetwork:        viper.GetString("SANDBOX_NETWORK"),
 		SandboxPassEnv:        splitList(viper.GetString("SANDBOX_PASS_ENV")),
 
+		ReviewEnabled:   viper.GetBool("REVIEW_ENABLED"),
+		MaxReviewRounds: viper.GetInt("MAX_REVIEW_ROUNDS"),
+		TestEnabled:     viper.GetBool("TEST_ENABLED"),
+		AutoMerge:       viper.GetBool("AUTO_MERGE"),
+		MergeMethod:     viper.GetString("MERGE_METHOD"),
+
 		VerifyFixAttempts: viper.GetInt("VERIFY_FIX_ATTEMPTS"),
 		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),
 
@@ -215,6 +228,12 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.RunnerAllowedCommands == nil {
 		cfg.RunnerAllowedCommands = defaultRunnerAllowedCommands
+	}
+	if cfg.MaxReviewRounds <= 0 {
+		cfg.MaxReviewRounds = 2
+	}
+	if cfg.MergeMethod == "" {
+		cfg.MergeMethod = "squash"
 	}
 	if cfg.MaxTicketAttempts <= 0 {
 		cfg.MaxTicketAttempts = 3
@@ -338,6 +357,16 @@ func (c *Config) Validate() error {
 		}
 	default:
 		return errors.NewConfigInvalidError("AI_RUNNER", c.AIRunner, "supported values: legacy, claude-code")
+	}
+
+	if (c.ReviewEnabled || c.TestEnabled) && c.AIRunner != "claude-code" {
+		return errors.NewConfigInvalidError("REVIEW_ENABLED/TEST_ENABLED", true,
+			"the reviewer and tester personas require AI_RUNNER=claude-code")
+	}
+	switch c.MergeMethod {
+	case "", "squash", "merge", "rebase":
+	default:
+		return errors.NewConfigInvalidError("MERGE_METHOD", c.MergeMethod, "supported values: squash, merge, rebase")
 	}
 
 	// Validate concurrent tickets

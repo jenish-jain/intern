@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	logger "github.com/jenish-jain/logger"
@@ -20,8 +21,11 @@ type State struct {
 	// were counted against. Editing the ticket changes the fingerprint and
 	// resets the count, so clarifying a ticket is how a human asks for a retry.
 	FailureFingerprints map[string]string `json:"failure_fingerprints,omitempty"`
-	mu                  sync.Mutex        `json:"-"`
-	filePath            string            `json:"-"`
+	// Flows tracks tickets whose PR is open and moving through review,
+	// test and merge.
+	Flows    map[string]*Flow `json:"flows,omitempty"`
+	mu       sync.Mutex       `json:"-"`
+	filePath string           `json:"-"`
 }
 
 func NewState(filePath string) *State {
@@ -158,6 +162,7 @@ func (s *State) Load() error {
 		Processed           map[string]bool   `json:"processed"`
 		Failures            map[string]int    `json:"failures"`
 		FailureFingerprints map[string]string `json:"failure_fingerprints"`
+		Flows               map[string]*Flow  `json:"flows"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -176,6 +181,7 @@ func (s *State) Load() error {
 	} else {
 		s.Failures = make(map[string]int)
 	}
+	s.Flows = temp.Flows
 	if temp.FailureFingerprints != nil {
 		s.FailureFingerprints = temp.FailureFingerprints
 	} else {
@@ -183,4 +189,43 @@ func (s *State) Load() error {
 	}
 
 	return nil
+}
+
+// SaveFlow stores a copy of f and persists the state.
+func (s *State) SaveFlow(f Flow) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Flows == nil {
+		s.Flows = make(map[string]*Flow)
+	}
+	cp := f
+	s.Flows[f.TicketKey] = &cp
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err, "ticket", f.TicketKey)
+	}
+}
+
+// DeleteFlow removes the flow for key and persists the state.
+func (s *State) DeleteFlow(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.Flows[key]; !ok {
+		return
+	}
+	delete(s.Flows, key)
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err, "ticket", key)
+	}
+}
+
+// ListFlows returns copies of all flows, oldest first.
+func (s *State) ListFlows() []Flow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Flow, 0, len(s.Flows))
+	for _, f := range s.Flows {
+		out = append(out, *f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
 }

@@ -23,6 +23,23 @@ Claude Code settings:
 
 The developer persona lives in `internal/personas/developer.md` and ships in the binary. It tells the agent to read the repo's CLAUDE.md, PRD, architecture doc and ADRs, keep scope to the ticket, run the verify commands, never push, and stop with `needs_human` questions instead of inventing requirements.
 
+## Personas
+
+| Role | Persona | Tools | Output |
+|---|---|---|---|
+| Developer | `internal/personas/developer.md` | Read, edit, run build and tests | Summary, judgment-call notes, or questions |
+| Reviewer | `internal/personas/reviewer.md` | Read and run verify only; edit tools and `git add`/`commit` are denied | Verdict (`approve` or `request_changes`) with line comments |
+
+## The flow after a PR opens
+
+With `REVIEW_ENABLED=true`, each PR the developer opens becomes a flow. Every poll cycle advances open flows before starting new tickets, so work in progress finishes first.
+
+1. **Review.** The reviewer reads the diff against the base branch, runs verify, and posts a review on the PR. Approval moves the flow on. A request for changes sends the comments to the developer.
+2. **Changes requested.** The developer addresses the comments on the PR branch. Intern gates, commits, verifies, pushes, comments a summary, and returns the PR to review.
+3. **Needs human.** After `MAX_REVIEW_ROUNDS` rejected reviews, or when a persona has questions, intern comments on the PR and the ticket and waits. Push fixes or answer in the PR, then add the `intern:resume` label to restart review with a fresh round budget.
+
+The current stage is visible as an `intern:<stage>` label on the PR. Merged or closed PRs drop out of the flow; merged ones move their ticket to Done.
+
 ## Sandboxes
 
 | `SANDBOX` | Isolation | Notes |

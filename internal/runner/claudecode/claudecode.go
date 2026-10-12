@@ -226,6 +226,12 @@ func prompt(job runner.Job) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Ticket %s: %s\n\n", job.TicketKey, job.Summary)
+	switch job.Role {
+	case runner.RoleReviewer:
+		fmt.Fprintf(&b, "Review the changes on the current branch against the base branch %q.\n\n", job.BaseBranch)
+	case runner.RoleTester:
+		fmt.Fprintf(&b, "Test the changes on the current branch (base branch %q) against the ticket's acceptance criteria.\n\n", job.BaseBranch)
+	}
 	if strings.TrimSpace(job.Description) != "" {
 		b.WriteString("## Description\n")
 		b.WriteString(strings.TrimSpace(job.Description))

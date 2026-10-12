@@ -136,6 +136,10 @@ func (c *Coordinator) Run(ctx context.Context) {
 			// deferred tickets can unblock, and move those tickets to Done.
 			c.reconcileMerged(ctx)
 
+			// Finish in-flight PRs (review, fixes, test, merge) before
+			// starting new tickets.
+			c.advanceFlows(ctx)
+
 			tickets, err := func() ([]ticketing.Ticket, error) {
 				var out []ticketing.Ticket
 				err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
@@ -373,6 +377,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	// The ticket moves to Done only once this PR merges (see
 	// reconcileMerged), so dependent tickets never start on an unmerged base.
 	c.setStatus(ctx, key, ticketing.StatusInReview)
+	c.startFlow(ctx, key, summary, description, branchName, prURL, usage.CostUSD)
 
 	executionTime := time.Since(startTime)
 	ticketMetrics.SetExecutionTime(executionTime)
