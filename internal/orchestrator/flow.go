@@ -122,6 +122,7 @@ func (c *Coordinator) escalate(ctx context.Context, f *Flow, reason string) {
 		logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", err)
 	}
 	c.comment(ctx, f.TicketKey, "Needs human attention on "+f.PRURL+": "+reason)
+	c.notify(ctx, fmt.Sprintf(":raising_hand: %s needs a human: %s\n%s", f.TicketKey, reason, f.PRURL))
 	c.moveFlow(ctx, f, StageNeedsHuman)
 }
 
@@ -437,6 +438,7 @@ func (c *Coordinator) runMerge(ctx context.Context, f *Flow, pr repository.PRSta
 		if cerr := c.Repository.CommentPR(ctx, f.PRURL, fmt.Sprintf("**intern: merged** after %d review and %d fix rounds. Total model cost for this ticket: $%.2f.", f.ReviewRounds, f.FixRounds, f.CostUSD)); cerr != nil {
 			logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", cerr)
 		}
+		c.notify(ctx, fmt.Sprintf(":white_check_mark: Merged %s: %s (%s, $%.2f)", f.TicketKey, f.Summary, f.PRURL, f.CostUSD))
 		// reconcileMerged moves the ticket to Done on the next cycle.
 		c.State.DeleteFlow(f.TicketKey)
 		return nil

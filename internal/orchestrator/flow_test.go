@@ -477,3 +477,35 @@ func TestFlow_AutoMergeConflictAndErrors(t *testing.T) {
 		t.Fatalf("repeated merge errors should escalate: %+v", f)
 	}
 }
+
+type recordingNotifier struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (n *recordingNotifier) Notify(_ context.Context, text string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.msgs = append(n.msgs, text)
+	return nil
+}
+
+func TestFlow_NotifiesOnMergeAndEscalation(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	n := &recordingNotifier{}
+	c.Notifier = n
+	ctx := context.Background()
+
+	c.startFlow(ctx, "P-1", "Add login", "d", "feature/P-1", "https://github.com/o/r/pull/7", 1.5)
+	repo.pr.Checks = repository.ChecksSuccess
+	c.advanceFlows(ctx)
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0], "Merged P-1: Add login") {
+		t.Fatalf("notifications = %v", n.msgs)
+	}
+
+	f := Flow{TicketKey: "P-2", PRURL: "https://github.com/o/r/pull/8"}
+	c.escalate(ctx, &f, "tests keep failing")
+	if len(n.msgs) != 2 || !strings.Contains(n.msgs[1], "P-2 needs a human: tests keep failing") {
+		t.Errorf("notifications = %v", n.msgs)
+	}
+}

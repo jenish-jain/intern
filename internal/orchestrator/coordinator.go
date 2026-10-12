@@ -35,6 +35,10 @@ type Coordinator struct {
 	RepoPaths  *repository.RepositoryPath // Centralized path management
 	Journal    *journal.Journal           // Cross-ticket continuity log
 
+	// Notifier announces events a person should see (escalations,
+	// merges). Optional.
+	Notifier Notifier
+
 	// repoMu serializes use of the shared clone between the poll loop and
 	// request-driven work (Slack asks, architect conversations).
 	repoMu sync.Mutex

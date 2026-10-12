@@ -21,7 +21,7 @@ import (
 type Dependencies struct {
 	Config       *config.Config
 	JiraClient   interface{}            // JIRA ticketing client
-	SlackClient  *slackticketing.Client // set only when TicketingMode == "slack"
+	SlackClient  *slackticketing.Client // set when Slack is configured
 	TicketingSvc *ticketing.Service
 	GitHubClient repository.RepositoryClient
 	RepoSvc      *repository.RepositoryService
@@ -74,6 +74,20 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 		}
 		jiraClient = client
 		ticketingSvc = ticketing.NewService(client)
+
+		// Team mode: Slack carries architect conversations and
+		// notifications while JIRA holds the tickets.
+		if cfg.SlackBotToken != "" {
+			sc, err := slackticketing.NewSlackClient(cfg.SlackBotToken)
+			if err != nil {
+				return nil, err
+			}
+			if err := sc.HealthCheck(context.Background()); err != nil {
+				logger.Error("Slack health check failed: %v", err)
+				return nil, err
+			}
+			slackClient = sc
+		}
 	}
 
 	// Create repository path manager
@@ -116,6 +130,9 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 
 	// Create coordinator
 	coordinator := orchestrator.NewCoordinator(ticketingSvc, repoSvc, agent, cfg, state, repoPaths)
+	if slackClient != nil && cfg.SlackNotifyChannel != "" {
+		coordinator.Notifier = &slackticketing.ChannelNotifier{Client: slackClient, Channel: cfg.SlackNotifyChannel}
+	}
 	r, err := provider.NewRunner(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize runner", "error", err)

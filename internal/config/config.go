@@ -29,6 +29,12 @@ type Config struct {
 
 	SlackBotToken      string
 	SlackSigningSecret string
+	// SlackArchitectChannel: every thread in this channel ID is an
+	// architect conversation. Messages starting with "plan:" elsewhere
+	// start one too.
+	SlackArchitectChannel string
+	// SlackNotifyChannel receives escalations and merge announcements.
+	SlackNotifyChannel string
 
 	// Port is the HTTP listen port for `agent serve` (Slack webhook + healthz).
 	// Cloud Run injects this via the PORT env var.
@@ -134,9 +140,11 @@ func LoadConfig() (*Config, error) {
 			"Done":        viper.GetString("JIRA_TRANSITION_DONE"),
 		},
 
-		SlackBotToken:      viper.GetString("SLACK_BOT_TOKEN"),
-		SlackSigningSecret: viper.GetString("SLACK_SIGNING_SECRET"),
-		Port:               viper.GetString("PORT"),
+		SlackBotToken:         viper.GetString("SLACK_BOT_TOKEN"),
+		SlackSigningSecret:    viper.GetString("SLACK_SIGNING_SECRET"),
+		SlackArchitectChannel: viper.GetString("SLACK_ARCHITECT_CHANNEL"),
+		SlackNotifyChannel:    viper.GetString("SLACK_NOTIFY_CHANNEL"),
+		Port:                  viper.GetString("PORT"),
 
 		GitHubToken: viper.GetString("GITHUB_TOKEN"),
 		GitHubOwner: viper.GetString("GITHUB_OWNER"),
@@ -313,6 +321,10 @@ func (c *Config) Validate() error {
 	default:
 		return errors.NewConfigInvalidError("TICKETING_MODE", c.TicketingMode,
 			"supported values: jira, slack")
+	}
+
+	if c.SlackBotToken != "" && c.SlackSigningSecret == "" {
+		return errors.NewConfigMissingError("SLACK_SIGNING_SECRET")
 	}
 
 	// Validate required GitHub configuration

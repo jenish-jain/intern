@@ -22,9 +22,10 @@ var ServeCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Serve the AI Intern Agent over HTTP (Slack webhook, request-driven)",
 	Long: `Start an HTTP server exposing the agent's request-driven trigger(s).
-Currently supports the Slack Events API webhook (requires TICKETING_MODE=slack).
-This is the entrypoint used for the Cloud Run deployment: it listens on $PORT,
-handles one ask per request, and scales to zero when idle.`,
+Serves the Slack Events API webhook. With TICKETING_MODE=slack, each Slack ask
+is a one-off ticket. With TICKETING_MODE=jira (team mode), Slack threads are
+architect conversations and the JIRA poll loop runs in the background, so the
+process must stay up (on Cloud Run: min instances 1, CPU always allocated).`,
 	RunE: serve,
 }
 
@@ -37,8 +38,8 @@ func serve(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if deps.Config.TicketingMode != "slack" {
-		return errors.New("agent serve requires TICKETING_MODE=slack (got " + deps.Config.TicketingMode + ")")
+	if deps.SlackClient == nil {
+		return errors.New("agent serve requires Slack: set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET")
 	}
 
 	mux := http.NewServeMux()
@@ -46,7 +47,8 @@ func serve(cmd *cobra.Command, args []string) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/slack/events", slackticketing.NewHandler(deps.SlackClient, deps.Config.SlackSigningSecret, deps.Coordinator))
+	mux.Handle("/slack/events", slackticketing.NewHandler(deps.SlackClient, deps.Config.SlackSigningSecret, deps.Coordinator,
+		slackticketing.HandlerOptions{ArchitectChannel: deps.Config.SlackArchitectChannel}))
 
 	addr := ":" + deps.Config.Port
 	server := &http.Server{
@@ -67,6 +69,14 @@ func serve(cmd *cobra.Command, args []string) error {
 		_ = server.Shutdown(shutdownCtx)
 		cancel()
 	}()
+
+	// Team mode: with JIRA as the ticketing backend, the poll loop runs in
+	// the background so tickets the architect creates get built, reviewed,
+	// tested and merged while Slack carries the conversation.
+	if deps.Config.TicketingMode == "jira" {
+		logger.Info("Team mode: starting the JIRA poll loop alongside the Slack endpoint")
+		go deps.Coordinator.Run(ctx)
+	}
 
 	logger.Info("Listening for Slack events", "addr", addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
