@@ -35,6 +35,10 @@ type Coordinator struct {
 	RepoPaths  *repository.RepositoryPath // Centralized path management
 	Journal    *journal.Journal           // Cross-ticket continuity log
 
+	// repoMu serializes use of the shared clone between the poll loop and
+	// request-driven work (Slack asks, architect conversations).
+	repoMu sync.Mutex
+
 	ticketMetricsMu sync.Mutex
 	ticketMetrics   map[string]*TicketMetrics // last-known metrics per ticket key, for request-driven callers (see LastTicketMetrics)
 }
@@ -125,60 +129,73 @@ func (c *Coordinator) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			// Ensure local repo is up to date before each cycle
-			if err := c.prepareRepository(ctx); err != nil {
-				logger.Error("Repository preparation failed", "error", err)
-				backoffSleep(interval)
-				continue
-			}
-
-			// Flip Merged for PRs that landed since the last cycle, so
-			// deferred tickets can unblock, and move those tickets to Done.
-			c.reconcileMerged(ctx)
-
-			// Finish in-flight PRs (review, fixes, test, merge) before
-			// starting new tickets.
-			c.advanceFlows(ctx)
-
-			tickets, err := func() ([]ticketing.Ticket, error) {
-				var out []ticketing.Ticket
-				err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-					t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
-					if e != nil {
-						return MakeTransient(e)
-					}
-					out = t
-					return nil
-				})
-				c.Metrics.AddRetries(attempts)
-				return out, err
-			}()
-			if err != nil {
-				logger.Error("Failed to fetch tickets", "error", err)
-				backoffSleep(interval)
-				continue
-			}
-			if len(tickets) == 0 {
-				logger.Info("No tickets to process; sleeping", "interval", interval.String())
-				time.Sleep(interval)
-				continue
-			}
-
-			c.dispatchTickets(ctx, tickets, c.processTicket)
-			// log metrics summary
-			s := c.Metrics.Snapshot()
-			logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
-			time.Sleep(interval)
+			c.runCycle(ctx, interval)
 		}
 	}
 }
 
-func backoffSleep(base time.Duration) {
-	t := base
-	if t < time.Second*5 {
-		t = time.Second * 5
+// runCycle is one poll iteration. It holds the repository lock so
+// request-driven work never shares the clone with it, and sleeps after
+// releasing it.
+func (c *Coordinator) runCycle(ctx context.Context, interval time.Duration) {
+	sleep := c.cycle(ctx, interval)
+	select {
+	case <-ctx.Done():
+	case <-time.After(sleep):
 	}
-	time.Sleep(t)
+}
+
+// cycle does the work of one poll iteration and returns how long to wait
+// before the next.
+func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Duration {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
+
+	// Ensure local repo is up to date before each cycle
+	if err := c.prepareRepository(ctx); err != nil {
+		logger.Error("Repository preparation failed", "error", err)
+		return backoffDuration(interval)
+	}
+
+	// Flip Merged for PRs that landed since the last cycle, so deferred
+	// tickets can unblock, and move those tickets to Done.
+	c.reconcileMerged(ctx)
+
+	// Finish in-flight PRs (review, fixes, test, merge) before starting
+	// new tickets.
+	c.advanceFlows(ctx)
+
+	var tickets []ticketing.Ticket
+	err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+		t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
+		if e != nil {
+			return MakeTransient(e)
+		}
+		tickets = t
+		return nil
+	})
+	c.Metrics.AddRetries(attempts)
+	if err != nil {
+		logger.Error("Failed to fetch tickets", "error", err)
+		return backoffDuration(interval)
+	}
+	if len(tickets) == 0 {
+		logger.Info("No tickets to process; sleeping", "interval", interval.String())
+		return interval
+	}
+
+	c.dispatchTickets(ctx, tickets, c.processTicket)
+	s := c.Metrics.Snapshot()
+	logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
+	return interval
+}
+
+// backoffDuration is the wait after a failed cycle: at least 5s.
+func backoffDuration(base time.Duration) time.Duration {
+	if base < 5*time.Second {
+		return 5 * time.Second
+	}
+	return base
 }
 
 // checkContext checks if the context has been cancelled and returns an appropriate error.
@@ -200,6 +217,8 @@ func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
 // single ticket outside of Run()'s polling loop and need to ensure the repo
 // is ready before ProcessTicket runs.
 func (c *Coordinator) PrepareRepository(ctx context.Context) error {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
 	return c.prepareRepository(ctx)
 }
 
@@ -208,6 +227,8 @@ func (c *Coordinator) PrepareRepository(ctx context.Context) error {
 // driven trigger sources (Slack webhook, Cloud Run handler) can invoke it
 // directly for one ticket without going through Run()'s JIRA polling loop.
 func (c *Coordinator) ProcessTicket(ctx context.Context, key, summary, description string) error {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
 	if err := c.processTicket(ctx, key, summary, description); err != nil {
 		return err
 	}

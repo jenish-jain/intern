@@ -222,10 +222,21 @@ func projectCommands(workdir string) []string {
 // prompt is the user message for a job. A follow-up (resumed) job only
 // needs the new input; the ticket is already in the session.
 func prompt(job runner.Job) string {
+	var b strings.Builder
+	if job.Role == runner.RoleArchitect {
+		b.WriteString("## Message from the product owner\n")
+		b.WriteString(strings.TrimSpace(job.Description))
+		b.WriteString("\n")
+		if job.Feedback != "" {
+			b.WriteString("\n## Context\n")
+			b.WriteString(job.Feedback)
+			b.WriteString("\n")
+		}
+		return b.String()
+	}
 	if job.SessionID != "" && job.Feedback != "" {
 		return job.Feedback
 	}
-	var b strings.Builder
 	fmt.Fprintf(&b, "Ticket %s: %s\n\n", job.TicketKey, job.Summary)
 	switch job.Role {
 	case runner.RoleReviewer:

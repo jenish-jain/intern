@@ -112,7 +112,7 @@ func TestE2E_ClaudeCodeReviewerAndTester(t *testing.T) {
 	job := runner.Job{
 		TicketKey: "CALC-2", Summary: "Add Max",
 		Description: "Add func Max(a, b int) int in package calc.\n\nAcceptance criteria:\n- Max(3, 7) == 7\n- Max(7, 3) == 7\n- Max(-1, -5) == -1",
-		Workdir: dir, BaseBranch: "master",
+		Workdir:     dir, BaseBranch: "master",
 	}
 	ctx := context.Background()
 

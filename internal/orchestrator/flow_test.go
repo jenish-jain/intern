@@ -25,6 +25,16 @@ type flowRepo struct {
 	pushes   []string
 	merges   []string
 	mergeErr error
+	prHeads  []string // head branches of PRs opened through CreatePullRequest
+}
+
+func (r *flowRepo) CreateBranch(_ context.Context, b string) error { return r.git("branch", "-f", b) }
+func (r *flowRepo) SyncWithRemote(context.Context) error         { return nil }
+func (r *flowRepo) CreatePullRequest(_ context.Context, base, head, title, body string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prHeads = append(r.prHeads, head)
+	return fmt.Sprintf("https://github.com/o/r/pull/%d", len(r.prHeads)), nil
 }
 
 func (r *flowRepo) git(args ...string) error {
@@ -89,6 +99,17 @@ func (r *flowRepo) MergePR(_ context.Context, url, method string) error {
 		return r.mergeErr
 	}
 	r.merges = append(r.merges, method)
+	if n := len(r.prHeads); n > 0 {
+		// Plan PRs: actually merge the head into master so the base
+		// branch carries the approved docs.
+		if err := r.git("checkout", "-q", "master"); err != nil {
+			return err
+		}
+		if err := r.git("merge", "-q", "--no-edit", r.prHeads[n-1]); err != nil {
+			return err
+		}
+		return nil
+	}
 	r.pr.Merged = true
 	return nil
 }

@@ -81,7 +81,6 @@ func TestApplyCodeChange(t *testing.T) {
 	}
 }
 
-
 // scriptedAgent returns canned plans and fixes and records what it saw.
 type scriptedAgent struct {
 	plan        []agent.CodeChange

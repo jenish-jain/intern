@@ -27,8 +27,10 @@ type State struct {
 	// BacklogKeys maps backlog ticket IDs to the ticket keys created for
 	// them, so re-importing a revised backlog never duplicates tickets.
 	BacklogKeys map[string]string `json:"backlog_keys,omitempty"`
-	mu          sync.Mutex        `json:"-"`
-	filePath    string            `json:"-"`
+	// Conversations are architect threads with the product owner.
+	Conversations map[string]*Conversation `json:"conversations,omitempty"`
+	mu            sync.Mutex               `json:"-"`
+	filePath      string                   `json:"-"`
 }
 
 func NewState(filePath string) *State {
@@ -162,11 +164,12 @@ func (s *State) Load() error {
 
 	// Decode into a temporary structure first
 	var temp struct {
-		Processed           map[string]bool   `json:"processed"`
-		Failures            map[string]int    `json:"failures"`
-		FailureFingerprints map[string]string `json:"failure_fingerprints"`
-		Flows               map[string]*Flow  `json:"flows"`
-		BacklogKeys         map[string]string `json:"backlog_keys"`
+		Processed           map[string]bool          `json:"processed"`
+		Failures            map[string]int           `json:"failures"`
+		FailureFingerprints map[string]string        `json:"failure_fingerprints"`
+		Flows               map[string]*Flow         `json:"flows"`
+		BacklogKeys         map[string]string        `json:"backlog_keys"`
+		Conversations       map[string]*Conversation `json:"conversations"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -187,6 +190,7 @@ func (s *State) Load() error {
 	}
 	s.Flows = temp.Flows
 	s.BacklogKeys = temp.BacklogKeys
+	s.Conversations = temp.Conversations
 	if temp.FailureFingerprints != nil {
 		s.FailureFingerprints = temp.FailureFingerprints
 	} else {
@@ -256,5 +260,30 @@ func (s *State) SetBacklogKey(id, key string) {
 	s.BacklogKeys[id] = key
 	if err := s.saveUnlocked(); err != nil {
 		logger.Error("Failed to save state file", "error", err, "backlog_id", id)
+	}
+}
+
+// GetConversation returns a copy of the conversation with id.
+func (s *State) GetConversation(id string) (Conversation, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.Conversations[id]
+	if !ok {
+		return Conversation{}, false
+	}
+	return *c, true
+}
+
+// SaveConversation stores a copy of conv and persists the state.
+func (s *State) SaveConversation(conv Conversation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Conversations == nil {
+		s.Conversations = make(map[string]*Conversation)
+	}
+	cp := conv
+	s.Conversations[conv.ID] = &cp
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err, "conversation", conv.ID)
 	}
 }
