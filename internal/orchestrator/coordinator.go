@@ -45,6 +45,9 @@ type Coordinator struct {
 	// remoteMu serializes pushes and PR creation from parallel tickets.
 	remoteMu sync.Mutex
 
+	team       teamMetrics
+	budgetOnce sync.Once
+
 	ticketMetricsMu sync.Mutex
 	ticketMetrics   map[string]*TicketMetrics // last-known metrics per ticket key, for request-driven callers (see LastTicketMetrics)
 }
@@ -95,6 +98,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 	// Start metrics server if enabled
 	if c.Cfg.MetricsEnabled {
 		metricsServer := NewMetricsServer(c.Metrics, c.Cfg.MetricsPort)
+		metricsServer.Team = c.Team
+		metricsServer.Spend = c.State.Spend
 		go func() {
 			if err := metricsServer.Start(ctx); err != nil {
 				logger.Error("Metrics server failed", "error", err)
@@ -170,6 +175,11 @@ func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Du
 	// Finish in-flight PRs (review, fixes, test, merge) before starting
 	// new tickets.
 	c.advanceFlows(ctx)
+
+	if c.budgetExceeded() {
+		logger.Warn("Project budget reached; not starting new tickets", "spent", c.State.Spend(), "budget", c.Cfg.ProjectBudgetUSD)
+		return interval
+	}
 
 	var tickets []ticketing.Ticket
 	err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
@@ -315,6 +325,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	ticketMetrics.OutputTokens = usage.OutputTokens
 	ticketMetrics.Cost = usage.CostUSD
 	c.Metrics.AddTokenUsage(usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+	c.recordSpend(ctx, runner.RoleDeveloper, usage.CostUSD)
 	logger.Info("Runner finished",
 		"ticket", key,
 		"cost", ai.FormatCost(usage.CostUSD),

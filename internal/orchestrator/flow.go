@@ -122,6 +122,7 @@ func (c *Coordinator) escalate(ctx context.Context, f *Flow, reason string) {
 		logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", err)
 	}
 	c.comment(ctx, f.TicketKey, "Needs human attention on "+f.PRURL+": "+reason)
+	c.team.count(&c.team.escalations)
 	c.notify(ctx, fmt.Sprintf(":raising_hand: %s needs a human: %s\n%s", f.TicketKey, reason, f.PRURL))
 	c.moveFlow(ctx, f, StageNeedsHuman)
 }
@@ -162,6 +163,9 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 		// abandoned by a human.
 		c.State.DeleteFlow(f.TicketKey)
 		return nil
+	}
+	if c.budgetExceeded() && (f.Stage == StageReview || f.Stage == StageChangesRequested || f.Stage == StageTest) {
+		return nil // paused until the budget is raised; merges still run
 	}
 	switch f.Stage {
 	case StageReview:
@@ -222,6 +226,7 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
 	})
 	f.CostUSD += res.Usage.CostUSD
+	c.recordSpend(ctx, runner.RoleReviewer, res.Usage.CostUSD)
 	// Reviewers can't edit, but never let stray files reach a later stage.
 	_ = discardLocalChanges(ctx, repoRoot)
 	if err != nil {
@@ -253,9 +258,11 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 	}
 
 	if res.Review.Approve {
+		c.team.count(&c.team.approvals)
 		c.moveFlow(ctx, f, c.stageAfterReview())
 		return nil
 	}
+	c.team.count(&c.team.rejections)
 	if f.ReviewRounds > c.Cfg.MaxReviewRounds {
 		c.escalate(ctx, f, fmt.Sprintf("review still requests changes after %d rounds", f.ReviewRounds))
 		return nil
@@ -298,6 +305,7 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
 	}, base)
 	f.CostUSD += out.Result.Usage.CostUSD
+	c.recordSpend(ctx, runner.RoleDeveloper, out.Result.Usage.CostUSD)
 	if err != nil {
 		c.escalate(ctx, f, "the developer could not address the feedback: "+truncateNotes(err.Error(), 500))
 		return nil
@@ -335,6 +343,7 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
 	})
 	f.CostUSD += res.Usage.CostUSD
+	c.recordSpend(ctx, runner.RoleTester, res.Usage.CostUSD)
 	if err != nil {
 		return err
 	}
@@ -397,9 +406,11 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 	}
 
 	if passed {
+		c.team.count(&c.team.testPasses)
 		c.moveFlow(ctx, f, StageMerge)
 		return nil
 	}
+	c.team.count(&c.team.testFails)
 	var fb strings.Builder
 	fb.WriteString("Acceptance testing found problems. The tester's tests are committed on this branch; make the application code satisfy them without weakening or deleting them.\n\n")
 	fb.WriteString("Tester summary: " + res.Summary + "\n")
@@ -438,6 +449,7 @@ func (c *Coordinator) runMerge(ctx context.Context, f *Flow, pr repository.PRSta
 		if cerr := c.Repository.CommentPR(ctx, f.PRURL, fmt.Sprintf("**intern: merged** after %d review and %d fix rounds. Total model cost for this ticket: $%.2f.", f.ReviewRounds, f.FixRounds, f.CostUSD)); cerr != nil {
 			logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", cerr)
 		}
+		c.team.count(&c.team.merges)
 		c.notify(ctx, fmt.Sprintf(":white_check_mark: Merged %s: %s (%s, $%.2f)", f.TicketKey, f.Summary, f.PRURL, f.CostUSD))
 		// reconcileMerged moves the ticket to Done on the next cycle.
 		c.State.DeleteFlow(f.TicketKey)

@@ -112,6 +112,9 @@ type Config struct {
 	// TicketBudgetUSD caps model spend per ticket for runners that
 	// support it (0 = no cap).
 	TicketBudgetUSD float64
+	// ProjectBudgetUSD caps total model spend across all roles; reaching
+	// it pauses new work (0 = no cap).
+	ProjectBudgetUSD float64
 
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 
@@ -201,6 +204,7 @@ func LoadConfig() (*Config, error) {
 
 		VerifyFixAttempts: viper.GetInt("VERIFY_FIX_ATTEMPTS"),
 		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),
+		ProjectBudgetUSD:  viper.GetFloat64("PROJECT_BUDGET_USD"),
 
 		DryRun: viper.GetBool("DRY_RUN"),
 

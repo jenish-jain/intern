@@ -25,7 +25,9 @@ Team mode is `agent serve` with `TICKETING_MODE=jira` and Slack configured. The 
 | `REVIEW_ENABLED`, `TEST_ENABLED`, `AUTO_MERGE` | Turn on the review, test and merge stages |
 | `JIRA_AGENT_ACCOUNT_ID` | Assignee for created tickets (looked up from `AGENT_USERNAME` if unset) |
 | `ALLOWED_WRITE_DIRS=*` | Let developers create the project's own layout |
-| `TICKET_BUDGET_USD`, `MAX_REVIEW_ROUNDS`, `VERIFY_FIX_ATTEMPTS` | Cost and loop limits |
+| `TICKET_BUDGET_USD`, `MAX_REVIEW_ROUNDS`, `VERIFY_FIX_ATTEMPTS` | Cost and loop limits per job and per PR |
+| `PROJECT_BUDGET_USD` | Total spend cap across all roles. Reaching it pauses planning, new tickets, reviews and tests (announced once in the notify channel); merges of ready PRs continue |
+| `MAX_CONCURRENT_TICKETS` | Developer tickets built in parallel, each in its own worktree |
 
 The Slack app needs the `app_mentions:read`, `chat:write`, `im:history` and `channels:history` scopes (add `groups:history` for private channels). Subscribe to the `app_mention`, `message.im` and `message.channels` events, with the request URL `https://<host>/slack/events`.
 
@@ -34,3 +36,7 @@ On Cloud Run the process must stay up for the poll loop: set minimum instances t
 ## Starting with a human merge gate
 
 Leave `AUTO_MERGE` off at first. Approved and tested PRs then wait with the `intern:ready-to-merge` label for a person to merge them, which is a cheap way to build trust in the reviewer and tester before letting the team merge on its own.
+
+## Watching it
+
+With `METRICS_ENABLED=true`, `/metrics` adds team metrics to the existing ones: `ai_intern_role_cost_dollars{role=...}`, `ai_intern_project_spend_dollars`, review approvals and rejections, acceptance test passes and failures, merges and escalations. A falling escalation rate and few review rounds per ticket mean the plan's tickets are well specified; rising ones usually mean tickets are too large or vague.

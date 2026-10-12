@@ -76,6 +76,9 @@ func (c *Coordinator) Converse(ctx context.Context, convID, message string) (str
 	if conv.Stage == ConvAwaitingApproval && IsApproval(message) {
 		return c.approvePlan(ctx, &conv)
 	}
+	if c.budgetExceeded() {
+		return fmt.Sprintf("The project budget is used up ($%.2f of $%.2f), so planning is paused. Raise PROJECT_BUDGET_USD to continue.", c.State.Spend(), c.Cfg.ProjectBudgetUSD), nil
+	}
 	if conv.Stage == ConvApproved {
 		// A message after approval is a change request: plan it on a fresh
 		// branch and PR, keeping the session so the architect remembers.
@@ -125,6 +128,7 @@ func (c *Coordinator) planRound(ctx context.Context, conv *Conversation, message
 		res, err = c.Runner.Run(ctx, job)
 	}
 	conv.CostUSD += res.Usage.CostUSD
+	c.recordSpend(ctx, runner.RoleArchitect, res.Usage.CostUSD)
 	if res.SessionID != "" {
 		conv.SessionID = res.SessionID
 	}

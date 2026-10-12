@@ -29,8 +29,10 @@ type State struct {
 	BacklogKeys map[string]string `json:"backlog_keys,omitempty"`
 	// Conversations are architect threads with the product owner.
 	Conversations map[string]*Conversation `json:"conversations,omitempty"`
-	mu            sync.Mutex               `json:"-"`
-	filePath      string                   `json:"-"`
+	// SpendUSD is the total model spend for the project across all roles.
+	SpendUSD float64    `json:"spend_usd,omitempty"`
+	mu       sync.Mutex `json:"-"`
+	filePath string     `json:"-"`
 }
 
 func NewState(filePath string) *State {
@@ -170,6 +172,7 @@ func (s *State) Load() error {
 		Flows               map[string]*Flow         `json:"flows"`
 		BacklogKeys         map[string]string        `json:"backlog_keys"`
 		Conversations       map[string]*Conversation `json:"conversations"`
+		SpendUSD            float64                  `json:"spend_usd"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -191,6 +194,7 @@ func (s *State) Load() error {
 	s.Flows = temp.Flows
 	s.BacklogKeys = temp.BacklogKeys
 	s.Conversations = temp.Conversations
+	s.SpendUSD = temp.SpendUSD
 	if temp.FailureFingerprints != nil {
 		s.FailureFingerprints = temp.FailureFingerprints
 	} else {
@@ -286,4 +290,22 @@ func (s *State) SaveConversation(conv Conversation) {
 	if err := s.saveUnlocked(); err != nil {
 		logger.Error("Failed to save state file", "error", err, "conversation", conv.ID)
 	}
+}
+
+// AddSpend adds usd to the project total, persists it, and returns the new total.
+func (s *State) AddSpend(usd float64) float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SpendUSD += usd
+	if err := s.saveUnlocked(); err != nil {
+		logger.Error("Failed to save state file", "error", err)
+	}
+	return s.SpendUSD
+}
+
+// Spend returns the project's total model spend.
+func (s *State) Spend() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.SpendUSD
 }
