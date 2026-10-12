@@ -58,31 +58,31 @@ func (j *Journal) Append(e Entry) error {
 // Reconcile checks unmerged entries against the VCS via checkMerged and flips
 // Merged to true for any whose PR has since been merged. checkMerged errors
 // are treated as transient (entry left unmerged, retried next cycle).
-// Returns the number of entries newly marked merged.
-func (j *Journal) Reconcile(ctx context.Context, checkMerged func(ctx context.Context, prURL string) (bool, error)) (int, error) {
+// Returns the ticket keys of entries newly marked merged.
+func (j *Journal) Reconcile(ctx context.Context, checkMerged func(ctx context.Context, prURL string) (bool, error)) ([]string, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
-	updated := 0
+	var merged []string
 	for i := range j.Entries {
 		e := &j.Entries[i]
 		if e.Merged || e.PRURL == "" {
 			continue
 		}
-		merged, err := checkMerged(ctx, e.PRURL)
-		if err != nil || !merged {
+		isMerged, err := checkMerged(ctx, e.PRURL)
+		if err != nil || !isMerged {
 			continue
 		}
 		e.Merged = true
-		updated++
+		merged = append(merged, e.TicketKey)
 	}
 
-	if updated > 0 {
+	if len(merged) > 0 {
 		if err := j.saveLocked(); err != nil {
-			return updated, fmt.Errorf("save journal after reconcile: %w", err)
+			return merged, fmt.Errorf("save journal after reconcile: %w", err)
 		}
 	}
-	return updated, nil
+	return merged, nil
 }
 
 // Find returns the most recent entry for a ticket key, if one exists.

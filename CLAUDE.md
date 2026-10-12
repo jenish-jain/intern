@@ -99,7 +99,7 @@ make mocks              # Generate mocks (requires mockgen)
    - Apply changes and commit
    - Run quality gates (`go vet`, `go test` if enabled)
    - Push branch and create PR
-   - Update ticket status to "Done"
+   - Move ticket to "In Review" (it moves to "Done" when the PR merges)
    - Mark ticket as processed in state file
 
 ### Key Patterns

@@ -45,7 +45,7 @@ An autonomous Go-based engineering assistant that reads JIRA tickets assigned to
    - **Builds smart repo context**: extracts keywords from ticket, scores files by relevance, selects top matches
    - Calls AI agent to plan changes based on minimal context (function signatures, not implementations)
    - Applies changes, commits, pushes
-   - Creates a PR and updates ticket status to Done
+   - Creates a PR and moves the ticket to In Review; it moves to Done once the PR merges
 
 ### Smart Context Selection
 

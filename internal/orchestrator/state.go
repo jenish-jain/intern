@@ -16,32 +16,50 @@ type State struct {
 	// loop stops retrying a ticket once this reaches MAX_TICKET_ATTEMPTS,
 	// so a ticket that can never succeed doesn't burn AI spend every cycle.
 	Failures map[string]int `json:"failures,omitempty"`
-	mu       sync.Mutex     `json:"-"`
-	filePath string         `json:"-"`
+	// FailureFingerprints records the ticket text fingerprint the failures
+	// were counted against. Editing the ticket changes the fingerprint and
+	// resets the count, so clarifying a ticket is how a human asks for a retry.
+	FailureFingerprints map[string]string `json:"failure_fingerprints,omitempty"`
+	mu                  sync.Mutex        `json:"-"`
+	filePath            string            `json:"-"`
 }
 
 func NewState(filePath string) *State {
 	return &State{
-		Processed: make(map[string]bool),
-		Failures:  make(map[string]int),
-		filePath:  filePath,
+		Processed:           make(map[string]bool),
+		Failures:            make(map[string]int),
+		FailureFingerprints: make(map[string]string),
+		filePath:            filePath,
 	}
 }
 
-// Attempts returns how many times processing has failed for key.
-func (s *State) Attempts(key string) int {
+// Attempts returns how many times processing has failed for key against
+// the given ticket fingerprint. A different fingerprint means the ticket was
+// edited since those failures, so the count is treated as zero.
+func (s *State) Attempts(key, fingerprint string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.FailureFingerprints[key] != fingerprint {
+		return 0
+	}
 	return s.Failures[key]
 }
 
 // RecordFailure increments and persists the failure count for key,
-// returning the new count.
-func (s *State) RecordFailure(key string) int {
+// restarting from zero if the ticket fingerprint changed, and returns the
+// new count.
+func (s *State) RecordFailure(key, fingerprint string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Failures == nil {
 		s.Failures = make(map[string]int)
+	}
+	if s.FailureFingerprints == nil {
+		s.FailureFingerprints = make(map[string]string)
+	}
+	if s.FailureFingerprints[key] != fingerprint {
+		s.Failures[key] = 0
+		s.FailureFingerprints[key] = fingerprint
 	}
 	s.Failures[key]++
 	if err := s.saveUnlocked(); err != nil {
@@ -137,8 +155,9 @@ func (s *State) Load() error {
 
 	// Decode into a temporary structure first
 	var temp struct {
-		Processed map[string]bool `json:"processed"`
-		Failures  map[string]int  `json:"failures"`
+		Processed           map[string]bool   `json:"processed"`
+		Failures            map[string]int    `json:"failures"`
+		FailureFingerprints map[string]string `json:"failure_fingerprints"`
 	}
 
 	if err := json.NewDecoder(f).Decode(&temp); err != nil {
@@ -156,6 +175,11 @@ func (s *State) Load() error {
 		s.Failures = temp.Failures
 	} else {
 		s.Failures = make(map[string]int)
+	}
+	if temp.FailureFingerprints != nil {
+		s.FailureFingerprints = temp.FailureFingerprints
+	} else {
+		s.FailureFingerprints = make(map[string]string)
 	}
 
 	return nil

@@ -126,13 +126,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 				continue
 			}
 
-			// Reconcile journal entries: flip Merged for PRs that landed since
-			// the last cycle, so deferred tickets can unblock.
-			if updated, err := c.Journal.Reconcile(ctx, c.Repository.IsPRMerged); err != nil {
-				logger.Warn("Journal reconciliation failed", "error", err)
-			} else if updated > 0 {
-				logger.Info("Journal reconciliation: marked PRs as merged", "count", updated)
-			}
+			// Flip Merged for PRs that landed since the last cycle, so
+			// deferred tickets can unblock, and move those tickets to Done.
+			c.reconcileMerged(ctx)
 
 			tickets, err := func() ([]ticketing.Ticket, error) {
 				var out []ticketing.Ticket
@@ -158,56 +154,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 				continue
 			}
 
-			maxWorkers := c.Cfg.MaxConcurrentTickets
-			if maxWorkers <= 0 {
-				maxWorkers = 1
-			}
-			sem := make(chan struct{}, maxWorkers)
-			var wg sync.WaitGroup
-			for _, t := range tickets {
-				if c.State.IsProcessed(t.Key) {
-					continue
-				}
-				if n := c.State.Attempts(t.Key); n >= c.Cfg.MaxTicketAttempts {
-					logger.Warn("Skipping ticket - attempt limit reached; needs human attention",
-						"ticket", t.Key, "attempts", n, "limit", c.Cfg.MaxTicketAttempts)
-					continue
-				}
-				if blocker := c.journalBlocker(t.Summary + " " + t.Description); blocker != "" {
-					logger.Info("Deferring ticket - related work not yet merged", "ticket", t.Key, "waiting_on", blocker)
-					continue
-				}
-				sem <- struct{}{}
-				wg.Add(1)
-				go func(key, summary, description string) {
-					// Ensure cleanup happens even on panic
-					defer wg.Done()
-					defer func() { <-sem }()
-
-					// Panic recovery - catch and log panics without crashing agent
-					defer func() {
-						if r := recover(); r != nil {
-							logger.Error("Worker panic recovered", "ticket", key, "panic", r)
-							c.Metrics.IncTicketsFailed()
-							// Panic recovered - ticket will not be marked as processed
-							// It will be retried in next polling cycle
-						}
-					}()
-
-					// Process the ticket
-					if err := c.processTicket(ctx, key, summary, description); err != nil {
-						n := c.State.RecordFailure(key)
-						logger.Error("Failed processing ticket", "key", key, "error", err,
-							"attempt", n, "limit", c.Cfg.MaxTicketAttempts)
-						c.Metrics.IncTicketsFailed()
-						return
-					}
-
-					// Only mark as processed if successful
-					c.State.MarkProcessed(key)
-				}(t.Key, t.Summary, t.Description)
-			}
-			wg.Wait()
+			c.dispatchTickets(ctx, tickets, c.processTicket)
 			// log metrics summary
 			s := c.Metrics.Snapshot()
 			logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
@@ -266,6 +213,9 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := discardLocalChanges(ctx, repoPath); err != nil {
+		logger.Warn("Could not clean agent clone", "error", err)
+	}
 	base := c.Cfg.BaseBranch
 	if base == "" {
 		base = "main"
@@ -293,6 +243,8 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	// full pipeline completes.
 	ticketMetrics := &TicketMetrics{TicketKey: key, Status: "failed", Timestamp: startTime}
 	c.storeTicketMetrics(key, ticketMetrics)
+
+	c.setStatus(ctx, key, ticketing.StatusInProgress)
 
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
 	logger.Info("Creating branch", "branch", branchName)
@@ -535,7 +487,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	}
 	if !changed && len(valid) == 0 {
 		logger.Info("No effective changes; skipping push/PR", "key", key)
-		return nil
+		return fmt.Errorf("AI produced no effective changes for this ticket")
 	}
 
 	// Run self-healing pipeline (includes quality gates)
@@ -604,11 +556,6 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 			"files", len(valid),
 			"summary", summary)
 
-		// Mark Done even in dry-run (to avoid reprocessing)
-		if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
-			logger.Error("Failed to move ticket to Done", "error", err)
-		}
-
 		// Update state to avoid reprocessing
 		// MarkProcessed automatically saves the state, so no need to call Save() explicitly
 		c.State.MarkProcessed(key)
@@ -669,10 +616,9 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		logger.Warn("Failed to append journal entry", "ticket", key, "error", err)
 	}
 
-	// Mark Done
-	if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
-		logger.Error("Failed to move ticket to Done", "error", err)
-	}
+	// The ticket moves to Done only once this PR merges (see
+	// reconcileMerged), so dependent tickets never start on an unmerged base.
+	c.setStatus(ctx, key, ticketing.StatusInReview)
 
 	// Update metrics with execution time and files changed
 	executionTime := time.Since(startTime)
