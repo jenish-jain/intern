@@ -63,7 +63,9 @@ func TestProcessTicket_ParallelWorktrees(t *testing.T) {
 			t.Errorf("%s not processed; comments %v", k, ft.comments[k])
 		}
 		other := map[string]string{"P-10": "P-11", "P-11": "P-10"}[k]
-		branch := "feature/" + k
+		// Use the real branch name: it is lowercased, and on a
+		// case-sensitive filesystem "feature/P-10" is a different ref.
+		branch := buildBranchName(c.Cfg.BranchPrefix, k)
 		if out, err := exec.Command("git", "-C", repo.dir, "show", branch+":"+k+".txt").Output(); err != nil || string(out) != k+"\n" {
 			t.Errorf("%s missing its own file: %q %v", branch, out, err)
 		}
@@ -80,7 +82,7 @@ func TestProcessTicket_ParallelWorktrees(t *testing.T) {
 	if got := currentBranch(t, repo.dir); got != "master" {
 		t.Errorf("main clone moved to %s", got)
 	}
-	log, _ := exec.Command("git", "-C", repo.dir, "log", "-1", "--format=%an", "feature/P-10").Output()
+	log, _ := exec.Command("git", "-C", repo.dir, "log", "-1", "--format=%an", buildBranchName(c.Cfg.BranchPrefix, "P-10")).Output()
 	if strings.TrimSpace(string(log)) != commitAuthorName {
 		t.Errorf("commit author = %q", log)
 	}
