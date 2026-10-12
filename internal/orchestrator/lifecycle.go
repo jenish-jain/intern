@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -111,13 +113,23 @@ func (c *Coordinator) handleTicketFailure(ctx context.Context, t ticketing.Ticke
 	limit := c.Cfg.MaxTicketAttempts
 	logger.Error("Failed processing ticket", "key", t.Key, "error", err, "attempt", n, "limit", limit)
 
-	msg := err.Error()
-	if len(msg) > maxCommentErrorLen {
-		msg = msg[:maxCommentErrorLen] + "…"
-	}
-	body := fmt.Sprintf("intern attempt %d of %d failed:\n%s", n, limit, msg)
-	if n >= limit {
-		body += "\n\nI've stopped retrying this ticket. Edit its summary or description to clarify it, and I'll try again on the next poll."
+	var body string
+	var nh *NeedsHumanError
+	if errors.As(err, &nh) {
+		body = "I need more information before I can finish this ticket:\n"
+		for _, q := range nh.Questions {
+			body += "- " + q + "\n"
+		}
+		body += "\nAdd the answers to the ticket description and I'll pick it up again on the next poll."
+	} else {
+		msg := err.Error()
+		if len(msg) > maxCommentErrorLen {
+			msg = msg[:maxCommentErrorLen] + "…"
+		}
+		body = fmt.Sprintf("intern attempt %d of %d failed:\n%s", n, limit, msg)
+		if n >= limit {
+			body += "\n\nI've stopped retrying this ticket. Edit its summary or description to clarify it, and I'll try again on the next poll."
+		}
 	}
 	c.comment(ctx, t.Key, body)
 	c.setStatus(ctx, t.Key, ticketing.StatusToDo)
@@ -165,4 +177,11 @@ func discardLocalChanges(ctx context.Context, repoRoot string) error {
 		return fmt.Errorf("git clean: %w: %s", err, out)
 	}
 	return nil
+}
+
+func runCommandCapture(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

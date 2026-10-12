@@ -69,6 +69,14 @@ type Config struct {
 	SelfHealOnVet       bool // Retry on vet failures
 	SelfHealOnBuild     bool // Retry on build failures
 
+	// VerifyFixAttempts is how many times a failing verify is handed back
+	// to the runner to fix. Defaults to SELF_HEAL_MAX_ATTEMPTS when
+	// SELF_HEAL_ENABLED is set, otherwise 0.
+	VerifyFixAttempts int
+	// TicketBudgetUSD caps model spend per ticket for runners that
+	// support it (0 = no cap).
+	TicketBudgetUSD float64
+
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 
 	// Metrics server configuration
@@ -134,6 +142,9 @@ func LoadConfig() (*Config, error) {
 		SelfHealOnVet:       viper.GetBool("SELF_HEAL_ON_VET"),
 		SelfHealOnBuild:     viper.GetBool("SELF_HEAL_ON_BUILD"),
 
+		VerifyFixAttempts: viper.GetInt("VERIFY_FIX_ATTEMPTS"),
+		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),
+
 		DryRun: viper.GetBool("DRY_RUN"),
 
 		MetricsEnabled: viper.GetBool("METRICS_ENABLED"),
@@ -174,6 +185,9 @@ func LoadConfig() (*Config, error) {
 		cfg.SelfHealMaxAttempts = 3 // Default: 3 healing attempts
 	}
 	// SelfHealEnabled defaults to false (opt-in)
+	if !viper.IsSet("VERIFY_FIX_ATTEMPTS") && cfg.SelfHealEnabled {
+		cfg.VerifyFixAttempts = cfg.SelfHealMaxAttempts
+	}
 	// SelfHealOnTests, SelfHealOnVet, SelfHealOnBuild default to false
 
 	// Metrics defaults
