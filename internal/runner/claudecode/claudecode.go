@@ -26,16 +26,32 @@ import (
 // DefaultTimeout bounds one job when the job sets no timeout.
 const DefaultTimeout = 45 * time.Minute
 
-// resultSchema is the structured output every persona must end with.
-const resultSchema = `{"type":"object","additionalProperties":false,"required":["status","summary"],"properties":{` +
-	`"status":{"type":"string","enum":["done","needs_human","failed"]},` +
+// commonProps are the result fields every role returns.
+const commonProps = `"status":{"type":"string","enum":["done","needs_human","failed"]},` +
 	`"summary":{"type":"string"},` +
 	`"notes":{"type":"array","items":{"type":"string"}},` +
-	`"questions":{"type":"array","items":{"type":"string"}}}}`
+	`"questions":{"type":"array","items":{"type":"string"}}`
+
+// schemas are the structured outputs each role must end with.
+var schemas = map[runner.Role]string{
+	runner.RoleDeveloper: `{"type":"object","additionalProperties":false,"required":["status","summary"],"properties":{` + commonProps + `}}`,
+	runner.RoleReviewer: `{"type":"object","additionalProperties":false,"required":["status","summary","verdict"],"properties":{` + commonProps + `,` +
+		`"verdict":{"type":"string","enum":["approve","request_changes"]},` +
+		`"comments":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","line","body"],"properties":{` +
+		`"path":{"type":"string"},"line":{"type":"integer"},"body":{"type":"string"}}}}}}`,
+	runner.RoleTester: `{"type":"object","additionalProperties":false,"required":["status","summary","tests_passed"],"properties":{` + commonProps + `,` +
+		`"tests_passed":{"type":"boolean"},` +
+		`"failures":{"type":"array","items":{"type":"string"}}}}`,
+	runner.RoleArchitect: `{"type":"object","additionalProperties":false,"required":["status","summary"],"properties":{` + commonProps + `}}`,
+}
+
+// editTools write files; reviewers don't get them.
+var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 // readOnlyTools are always allowed when the sandbox is not isolated.
+// Roles that edit also get editTools.
 var readOnlyTools = []string{
-	"Read", "Glob", "Grep", "Edit", "Write", "MultiEdit", "TodoWrite",
+	"Read", "Glob", "Grep", "TodoWrite",
 	"Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
 	"Bash(git add:*)", "Bash(git commit:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(find:*)",
 }
@@ -90,6 +106,9 @@ func (r *Runner) Run(ctx context.Context, job runner.Job) (runner.Result, error)
 	if err != nil {
 		return runner.Result{}, err
 	}
+	if schemas[job.Role] == "" {
+		return runner.Result{}, fmt.Errorf("no result schema for role %q", job.Role)
+	}
 	timeout := job.Budget.Timeout
 	if timeout <= 0 {
 		timeout = r.cfg.Timeout
@@ -141,7 +160,7 @@ func (r *Runner) args(job runner.Job, persona string) []string {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--append-system-prompt", persona,
-		"--json-schema", resultSchema,
+		"--json-schema", schemas[job.Role],
 		// Load only the target repo's settings, never the host user's.
 		"--setting-sources", "project",
 	}
@@ -165,6 +184,9 @@ func (r *Runner) args(job runner.Job, persona string) []string {
 		args = append(args, "--dangerously-skip-permissions")
 	} else {
 		allowed := append([]string{}, readOnlyTools...)
+		if job.Role != runner.RoleReviewer {
+			allowed = append(allowed, editTools...)
+		}
 		for _, c := range append(append([]string{}, r.cfg.AllowedCommands...), projectCommands(job.Workdir)...) {
 			if c = strings.TrimSpace(c); c != "" {
 				allowed = append(allowed, "Bash("+c+":*)")
@@ -172,7 +194,11 @@ func (r *Runner) args(job runner.Job, persona string) []string {
 		}
 		args = append(args, "--permission-mode", "acceptEdits", "--allowedTools", strings.Join(allowed, ","))
 	}
-	return append(args, "--disallowedTools", strings.Join(deniedTools, ","))
+	denied := append([]string{}, deniedTools...)
+	if job.Role == runner.RoleReviewer {
+		denied = append(denied, editTools...)
+	}
+	return append(args, "--disallowedTools", strings.Join(denied, ","))
 }
 
 // projectCommands returns the target repo's setup and verify commands, so
@@ -228,6 +254,14 @@ type resultEvent struct {
 		Summary   string   `json:"summary"`
 		Notes     []string `json:"notes"`
 		Questions []string `json:"questions"`
+		Verdict   string   `json:"verdict"`
+		Comments  []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Body string `json:"body"`
+		} `json:"comments"`
+		TestsPassed *bool    `json:"tests_passed"`
+		Failures    []string `json:"failures"`
 	} `json:"structured_output"`
 	Usage struct {
 		InputTokens              int `json:"input_tokens"`
@@ -288,6 +322,16 @@ func (e *resultEvent) toResult() runner.Result {
 		return res
 	}
 	res.Summary, res.Notes, res.Questions = so.Summary, so.Notes, so.Questions
+	if so.Verdict != "" {
+		rv := &runner.Review{Approve: so.Verdict == "approve"}
+		for _, c := range so.Comments {
+			rv.Comments = append(rv.Comments, runner.ReviewComment{Path: c.Path, Line: c.Line, Body: c.Body})
+		}
+		res.Review = rv
+	}
+	if so.TestsPassed != nil {
+		res.Test = &runner.TestReport{Passed: *so.TestsPassed, Failures: so.Failures}
+	}
 	switch so.Status {
 	case "done":
 		res.Status = runner.StatusDone

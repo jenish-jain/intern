@@ -86,6 +86,33 @@ type Result struct {
 	Usage     Usage
 	SessionID string
 	Turns     int
+
+	// Review is set by reviewer jobs.
+	Review *Review
+	// Test is set by tester jobs.
+	Test *TestReport
+}
+
+// Review is a reviewer's verdict on a change.
+type Review struct {
+	Approve  bool
+	Comments []ReviewComment
+}
+
+// ReviewComment is a comment on a specific line of a changed file.
+type ReviewComment struct {
+	Path string
+	Line int
+	Body string
+}
+
+// TestReport is a tester's account of acceptance testing.
+type TestReport struct {
+	// Passed is true when the change meets the ticket's acceptance
+	// criteria under the tests the tester ran.
+	Passed bool
+	// Failures describe each unmet criterion or failing test.
+	Failures []string
 }
 
 // Runner performs a job in its workdir.
