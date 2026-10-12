@@ -334,8 +334,13 @@ func TestCircuitBreaker_OnStateChange(t *testing.T) {
 		return nil
 	})
 
-	if tr := next(); tr.from != StateOpen {
-		t.Errorf("Expected a transition out of OPEN, got %v->%v", tr.from, tr.to)
+	// Callbacks run on their own goroutines, so the two transitions can
+	// arrive in either order.
+	got := map[transition]bool{next(): true, next(): true}
+	for _, want := range []transition{{StateOpen, StateHalfOpen}, {StateHalfOpen, StateClosed}} {
+		if !got[want] {
+			t.Errorf("missing transition %v->%v, got %v", want.from, want.to, got)
+		}
 	}
 }
 
