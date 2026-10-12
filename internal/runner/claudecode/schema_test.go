@@ -93,3 +93,45 @@ func toSet(csv string) map[string]bool {
 	}
 	return m
 }
+
+// TestToResult_RecoversLeakedFields uses output captured from a real
+// reviewer run, where the model put its comments inside the summary.
+func TestToResult_RecoversLeakedFields(t *testing.T) {
+	leaked := "Max is inverted: it returns the smaller argument. Fix the comparison and add tests.</summary>\n" +
+		`<parameter name="comments">[{"path":"calc/max.go","line":5,"body":"Comparison is backwards."},` +
+		`{"path":"calc/max_test.go","line":4,"body":"Add table cases."}]`
+	raw, _ := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success",
+		"structured_output": map[string]any{"status": "done", "verdict": "request_changes", "summary": leaked},
+	})
+	var ev resultEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	res := ev.toResult()
+	if strings.Contains(res.Summary, "<parameter") || strings.Contains(res.Summary, "</summary>") {
+		t.Errorf("markup left in summary: %q", res.Summary)
+	}
+	if !strings.HasPrefix(res.Summary, "Max is inverted") {
+		t.Errorf("summary text lost: %q", res.Summary)
+	}
+	if res.Review == nil || len(res.Review.Comments) != 2 || res.Review.Comments[0].Line != 5 {
+		t.Errorf("comments not recovered: %+v", res.Review)
+	}
+}
+
+func TestToResult_LeakedScalarFields(t *testing.T) {
+	leaked := `All criteria pass.</summary><parameter name="tests_passed">true</parameter><parameter name="failures">[]</parameter>`
+	raw, _ := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success",
+		"structured_output": map[string]any{"status": "done", "summary": leaked},
+	})
+	var ev resultEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		t.Fatal(err)
+	}
+	res := ev.toResult()
+	if res.Test == nil || !res.Test.Passed || res.Summary != "All criteria pass." {
+		t.Errorf("got %+v / %q", res.Test, res.Summary)
+	}
+}

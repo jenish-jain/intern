@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -245,31 +246,34 @@ func prompt(job runner.Job) string {
 	return b.String()
 }
 
+// structuredOutput is the persona's final answer (--json-schema).
+type structuredOutput struct {
+	Status    string   `json:"status"`
+	Summary   string   `json:"summary"`
+	Notes     []string `json:"notes"`
+	Questions []string `json:"questions"`
+	Verdict   string   `json:"verdict"`
+	Comments  []struct {
+		Path string `json:"path"`
+		Line int    `json:"line"`
+		Body string `json:"body"`
+	} `json:"comments"`
+	TestsPassed *bool    `json:"tests_passed"`
+	Failures    []string `json:"failures"`
+}
+
 // resultEvent is the CLI's final stream-json event.
 type resultEvent struct {
-	Type             string  `json:"type"`
-	Subtype          string  `json:"subtype"`
-	IsError          bool    `json:"is_error"`
-	Result           string  `json:"result"`
-	SessionID        string  `json:"session_id"`
-	NumTurns         int     `json:"num_turns"`
-	TotalCostUSD     float64 `json:"total_cost_usd"`
-	TerminalReason   string  `json:"terminal_reason"`
-	StructuredOutput *struct {
-		Status    string   `json:"status"`
-		Summary   string   `json:"summary"`
-		Notes     []string `json:"notes"`
-		Questions []string `json:"questions"`
-		Verdict   string   `json:"verdict"`
-		Comments  []struct {
-			Path string `json:"path"`
-			Line int    `json:"line"`
-			Body string `json:"body"`
-		} `json:"comments"`
-		TestsPassed *bool    `json:"tests_passed"`
-		Failures    []string `json:"failures"`
-	} `json:"structured_output"`
-	Usage struct {
+	Type             string            `json:"type"`
+	Subtype          string            `json:"subtype"`
+	IsError          bool              `json:"is_error"`
+	Result           string            `json:"result"`
+	SessionID        string            `json:"session_id"`
+	NumTurns         int               `json:"num_turns"`
+	TotalCostUSD     float64           `json:"total_cost_usd"`
+	TerminalReason   string            `json:"terminal_reason"`
+	StructuredOutput *structuredOutput `json:"structured_output"`
+	Usage            struct {
 		InputTokens              int `json:"input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -322,6 +326,9 @@ func (e *resultEvent) toResult() runner.Result {
 		return res
 	}
 	so := e.StructuredOutput
+	if so != nil {
+		recoverLeakedFields(so)
+	}
 	if so == nil {
 		res.Status = runner.StatusFailed
 		res.Summary = "Claude Code finished without the structured result. Last message: " + truncate(e.Result, 1000)
@@ -347,6 +354,59 @@ func (e *resultEvent) toResult() runner.Result {
 		res.Status = runner.StatusFailed
 	}
 	return res
+}
+
+// leakedParam matches tool-call markup that some models emit inside a
+// string field instead of as separate fields, e.g.
+// `...</summary>\n<parameter name="comments">[...]`.
+var leakedParam = regexp.MustCompile(`(?s)<parameter name="([a-z_]+)">(.*?)(?:</parameter>|$)`)
+
+// recoverLeakedFields moves fields a model leaked into the summary string
+// back where they belong, and strips the markup from the summary.
+func recoverLeakedFields(so *structuredOutput) {
+	i := strings.Index(so.Summary, `<parameter name="`)
+	if i < 0 {
+		return
+	}
+	leaked := so.Summary[i:]
+	so.Summary = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(so.Summary[:i]), "</summary>"))
+	for _, m := range leakedParam.FindAllStringSubmatch(leaked, -1) {
+		name, value := m[1], strings.TrimSpace(m[2])
+		var target any
+		switch name {
+		case "comments":
+			if len(so.Comments) == 0 {
+				target = &so.Comments
+			}
+		case "notes":
+			if len(so.Notes) == 0 {
+				target = &so.Notes
+			}
+		case "questions":
+			if len(so.Questions) == 0 {
+				target = &so.Questions
+			}
+		case "failures":
+			if len(so.Failures) == 0 {
+				target = &so.Failures
+			}
+		case "verdict":
+			if so.Verdict == "" {
+				so.Verdict = strings.Trim(value, `"`)
+			}
+		case "tests_passed":
+			if so.TestsPassed == nil {
+				b := strings.Trim(value, `"`) == "true"
+				so.TestsPassed = &b
+			}
+		}
+		if target != nil {
+			if err := json.Unmarshal([]byte(value), target); err != nil {
+				logger.Warn("Could not recover leaked structured output field", "field", name, "error", err)
+			}
+		}
+	}
+	logger.Warn("Recovered structured output fields the model leaked into its summary")
 }
 
 func truncate(s string, max int) string {
