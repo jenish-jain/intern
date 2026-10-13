@@ -39,11 +39,18 @@ type Coordinator struct {
 	// merges). Optional.
 	Notifier Notifier
 
-	// repoMu serializes use of the shared clone between the poll loop and
-	// request-driven work (Slack asks, architect conversations).
+	// repoMu serializes use of the shared clone's working tree between the
+	// poll loop and request-driven work (Slack asks, architect
+	// conversations). Jobs never hold it: they run in their own worktrees.
 	repoMu sync.Mutex
-	// remoteMu serializes pushes and PR creation from parallel tickets.
-	remoteMu sync.Mutex
+	// gitMu serializes git operations on the shared repository (sync,
+	// fetch, worktree add/remove, push), which all jobs' worktrees share.
+	// It's held only for those commands, never for a whole job. Lock order:
+	// repoMu before gitMu.
+	gitMu sync.Mutex
+
+	// sched tracks running jobs; see scheduler.go.
+	sched scheduler
 
 	team       teamMetrics
 	budgetOnce sync.Once
@@ -138,6 +145,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Jobs see the cancelled context; let them stop cleanly.
+			c.sched.wait()
 			return
 		default:
 			c.runCycle(ctx, interval)
@@ -145,9 +154,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 	}
 }
 
-// runCycle is one poll iteration. It holds the repository lock so
-// request-driven work never shares the clone with it, and sleeps after
-// releasing it.
+// runCycle is one poll iteration followed by the wait before the next.
+// Jobs the cycle started keep running through the wait.
 func (c *Coordinator) runCycle(ctx context.Context, interval time.Duration) {
 	sleep := c.cycle(ctx, interval)
 	select {
@@ -157,24 +165,28 @@ func (c *Coordinator) runCycle(ctx context.Context, interval time.Duration) {
 }
 
 // cycle does the work of one poll iteration and returns how long to wait
-// before the next.
+// before the next. It starts jobs and returns without waiting for them:
+// reviews and tests of open PRs run alongside developers building new
+// tickets, each in its own worktree, and the next poll starts whatever has
+// become ready meanwhile.
 func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Duration {
 	c.repoMu.Lock()
-	defer c.repoMu.Unlock()
-
 	// Ensure local repo is up to date before each cycle
-	if err := c.prepareRepository(ctx); err != nil {
+	err := c.prepareRepository(ctx)
+	if err == nil {
+		// Flip Merged for PRs that landed since the last cycle, so deferred
+		// tickets can unblock, and move those tickets to Done.
+		c.reconcileMerged(ctx)
+	}
+	c.repoMu.Unlock()
+	if err != nil {
 		logger.Error("Repository preparation failed", "error", err)
 		return backoffDuration(interval)
 	}
 
-	// Flip Merged for PRs that landed since the last cycle, so deferred
-	// tickets can unblock, and move those tickets to Done.
-	c.reconcileMerged(ctx)
-
-	// Finish in-flight PRs (review, fixes, test, merge) before starting
-	// new tickets.
-	c.advanceFlows(ctx)
+	// Move open PRs along (review, fixes, test, merge) before starting new
+	// tickets, so finishing work gets the first free slots.
+	c.startFlows(ctx)
 
 	if c.budgetExceeded() {
 		logger.Warn("Project budget reached; not starting new tickets", "spent", c.State.Spend(), "budget", c.Cfg.ProjectBudgetUSD)
@@ -200,7 +212,7 @@ func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Du
 		return interval
 	}
 
-	c.dispatchTickets(ctx, tickets, c.processTicket)
+	c.startTickets(ctx, tickets, c.processTicket)
 	s := c.Metrics.Snapshot()
 	logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
 	return interval
@@ -253,6 +265,8 @@ func (c *Coordinator) ProcessTicket(ctx context.Context, key, summary, descripti
 }
 
 func (c *Coordinator) prepareRepository(ctx context.Context) error {
+	c.gitMu.Lock()
+	defer c.gitMu.Unlock()
 	repoPath := c.RepoPaths.Root()
 	if _, err := os.Stat(c.RepoPaths.GitDir()); os.IsNotExist(err) {
 		logger.Info("Cloning repository...")
@@ -350,12 +364,8 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		return nil
 	}
 
-	// Pushes and PR creation share the main clone's git storage and the
-	// GitHub client; serialize them across parallel tickets.
-	c.remoteMu.Lock()
-	defer c.remoteMu.Unlock()
 	pushErr, pushAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-		return MakeTransient(c.Repository.ForcePush(ctx, branchName))
+		return MakeTransient(c.push(ctx, branchName, true))
 	})
 	c.Metrics.AddRetries(pushAttempts)
 	if pushErr != nil {

@@ -226,6 +226,14 @@ func (s *State) SaveFlow(f Flow) {
 	}
 }
 
+// HasFlow reports whether a flow is tracking key's PR.
+func (s *State) HasFlow(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.Flows[key]
+	return ok
+}
+
 // DeleteFlow removes the flow for key and persists the state.
 func (s *State) DeleteFlow(key string) {
 	s.mu.Lock()

@@ -216,7 +216,7 @@ func (c *Coordinator) commitPlan(ctx context.Context, conv *Conversation, base, 
 	if err := c.commitStaged(ctx, repoRoot, fmt.Sprintf("docs(plan): round %d", conv.Round)); err != nil {
 		return false, err
 	}
-	if err := c.Repository.Push(ctx, conv.Branch); err != nil {
+	if err := c.push(ctx, conv.Branch, false); err != nil {
 		return false, fmt.Errorf("push plan: %w", err)
 	}
 	body := "Project plan maintained by the intern architect from the product owner's conversation.\n\n" + strings.TrimSpace(summary)

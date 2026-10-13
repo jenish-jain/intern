@@ -68,6 +68,23 @@ func (c *githubClient) FetchBranch(ctx context.Context, branch string) error {
 	return nil
 }
 
+func (c *githubClient) FindPR(ctx context.Context, branch string) (string, error) {
+	prs, _, err := c.ghClient.PullRequests.List(ctx, c.owner, c.repo, &gh.PullRequestListOptions{
+		Head:        c.owner + ":" + branch,
+		State:       "all",
+		Sort:        "created",
+		Direction:   "desc",
+		ListOptions: gh.ListOptions{PerPage: 1},
+	})
+	if err != nil {
+		return "", fmt.Errorf("find PR for %s: %w", branch, err)
+	}
+	if len(prs) == 0 {
+		return "", nil
+	}
+	return prs[0].GetHTMLURL(), nil
+}
+
 func (c *githubClient) GetPR(ctx context.Context, prURL string) (repository.PRState, error) {
 	num, err := prNumber(prURL)
 	if err != nil {

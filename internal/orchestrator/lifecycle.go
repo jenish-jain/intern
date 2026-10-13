@@ -48,18 +48,28 @@ func (c *Coordinator) comment(ctx context.Context, key, body string) {
 	}
 }
 
-// dispatchTickets runs process for each eligible ticket on a bounded worker
-// pool and waits for all of them. Tickets already processed, at their
-// attempt limit, blocked by unfinished tickets, or deferred by the journal
-// are skipped.
-func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.Ticket, process func(ctx context.Context, key, summary, description string) error) {
-	maxWorkers := c.Cfg.MaxConcurrentTickets
-	if maxWorkers <= 0 {
-		maxWorkers = 1
-	}
-	sem := make(chan struct{}, maxWorkers)
+// startTickets starts process for each eligible ticket while developer
+// slots allow, each in its own goroutine, and returns without waiting; the
+// returned group waits for the jobs it started. Tickets already running,
+// processed, at their attempt limit, blocked by unfinished tickets, or
+// deferred by the journal are skipped, and In Review tickets have their PR
+// tracked instead.
+func (c *Coordinator) startTickets(ctx context.Context, tickets []ticketing.Ticket, process func(ctx context.Context, key, summary, description string) error) (*sync.WaitGroup, map[string]bool) {
 	var wg sync.WaitGroup
+	started := map[string]bool{}
 	for _, t := range tickets {
+		if ctx.Err() != nil {
+			break
+		}
+		// Polls no longer wait for jobs, so a ticket can be In Progress
+		// because this process is building it right now.
+		if c.sched.isRunning(t.Key) {
+			continue
+		}
+		if t.Status == ticketing.StatusInReview {
+			c.trackReviewTicket(ctx, t)
+			continue
+		}
 		if c.State.IsProcessed(t.Key) {
 			continue
 		}
@@ -68,9 +78,6 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 			logger.Debug("Skipping ticket - attempt limit reached; edit the ticket to retry",
 				"ticket", t.Key, "attempts", n, "limit", c.Cfg.MaxTicketAttempts)
 			continue
-		}
-		if t.Status == "In Progress" {
-			logger.Info("Resuming ticket left In Progress by an interrupted run", "ticket", t.Key)
 		}
 		if open := t.OpenBlockers(); len(open) > 0 {
 			logger.Info("Deferring ticket - blocked by unfinished tickets", "ticket", t.Key, "blocked_by", open)
@@ -84,11 +91,8 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 				continue
 			}
 		}
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(t ticketing.Ticket, fp string) {
-			defer wg.Done()
-			defer func() { <-sem }()
+		t := t
+		ok := c.spawn(t.Key, jobDeveloper, &wg, func() {
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("Worker panic recovered", "ticket", t.Key, "panic", r)
@@ -96,16 +100,41 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 					c.handleTicketFailure(ctx, t, fp, fmt.Errorf("panic: %v", r))
 				}
 			}()
-
+			if t.Status == ticketing.StatusInProgress {
+				logger.Info("Resuming ticket left In Progress by an interrupted run", "ticket", t.Key)
+			}
 			if err := process(ctx, t.Key, t.Summary, t.Description); err != nil {
 				c.Metrics.IncTicketsFailed()
 				c.handleTicketFailure(ctx, t, fp, err)
 				return
 			}
 			c.State.MarkProcessed(t.Key)
-		}(t, fp)
+		})
+		if !ok {
+			break // developer slots are full; the next poll continues
+		}
+		started[t.Key] = true
 	}
-	wg.Wait()
+	return &wg, started
+}
+
+// dispatchTickets runs each eligible ticket once and waits for them all,
+// as many at a time as there are developer slots.
+func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.Ticket, process func(ctx context.Context, key, summary, description string) error) {
+	for len(tickets) > 0 && ctx.Err() == nil {
+		wg, started := c.startTickets(ctx, tickets, process)
+		wg.Wait()
+		if len(started) == 0 {
+			return
+		}
+		rest := tickets[:0:0]
+		for _, t := range tickets {
+			if !started[t.Key] {
+				rest = append(rest, t)
+			}
+		}
+		tickets = rest
+	}
 }
 
 // handleTicketFailure records the failure, explains it on the ticket, and

@@ -29,6 +29,8 @@ type flowRepo struct {
 	mergeErr      error
 	prHeads       []string // head branches of PRs opened through CreatePullRequest
 	humanComments []repository.PRComment
+	foundPR       string // FindPR's answer
+	mergedURLs    []string
 }
 
 func (r *flowRepo) ListComments(context.Context, string, time.Time) ([]repository.PRComment, error) {
@@ -69,10 +71,23 @@ func (r *flowRepo) ForcePush(ctx context.Context, b string) error {
 	return r.Push(ctx, b)
 }
 func (r *flowRepo) FetchBranch(context.Context, string) error { return nil }
-func (r *flowRepo) GetPR(context.Context, string) (repository.PRState, error) {
+func (r *flowRepo) FindPR(context.Context, string) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.pr, nil
+	return r.foundPR, nil
+}
+// GetPR answers with the shared PR state, merged once MergePR merged that
+// URL, so several flows can share one fake.
+func (r *flowRepo) GetPR(_ context.Context, url string) (repository.PRState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pr := r.pr
+	for _, m := range r.mergedURLs {
+		if m == url {
+			pr.Merged = true
+		}
+	}
+	return pr, nil
 }
 func (r *flowRepo) CommentPR(_ context.Context, _, body string) error {
 	r.mu.Lock()
@@ -114,6 +129,7 @@ func (r *flowRepo) MergePR(_ context.Context, url, method string) error {
 		return r.mergeErr
 	}
 	r.merges = append(r.merges, method)
+	r.mergedURLs = append(r.mergedURLs, url)
 	if n := len(r.prHeads); n > 0 {
 		// Plan PRs: actually merge the head into master so the base
 		// branch carries the approved docs.
@@ -125,7 +141,6 @@ func (r *flowRepo) MergePR(_ context.Context, url, method string) error {
 		}
 		return nil
 	}
-	r.pr.Merged = true
 	return nil
 }
 
