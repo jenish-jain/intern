@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,8 +13,8 @@ func TestNewRepositoryPath_Success(t *testing.T) {
 		t.Fatalf("NewRepositoryPath failed: %v", err)
 	}
 
-	if paths.WorkingDir() != "workspace" { // filepath.Clean removes ./
-		t.Errorf("WorkingDir = %s, want workspace", paths.WorkingDir())
+	if want := absWorkspace(t); paths.WorkingDir() != want { // relative paths resolve against the cwd
+		t.Errorf("WorkingDir = %s, want %s", paths.WorkingDir(), want)
 	}
 	if paths.RepoName() != "myrepo" {
 		t.Errorf("RepoName = %s, want myrepo", paths.RepoName())
@@ -67,7 +68,7 @@ func TestRepositoryPath_Root(t *testing.T) {
 	paths, _ := NewRepositoryPath("./workspace", "myrepo")
 	root := paths.Root()
 
-	expected := filepath.Join("workspace", "myrepo")
+	expected := filepath.Join(absWorkspace(t), "myrepo")
 	if root != expected {
 		t.Errorf("Root() = %s, want %s", root, expected)
 	}
@@ -77,7 +78,7 @@ func TestRepositoryPath_GitDir(t *testing.T) {
 	paths, _ := NewRepositoryPath("./workspace", "myrepo")
 	gitDir := paths.GitDir()
 
-	expected := filepath.Join("workspace", "myrepo", ".git")
+	expected := filepath.Join(absWorkspace(t), "myrepo", ".git")
 	if gitDir != expected {
 		t.Errorf("GitDir() = %s, want %s", gitDir, expected)
 	}
@@ -90,9 +91,9 @@ func TestRepositoryPath_File(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"config.go", filepath.Join("workspace", "myrepo", "config.go")},
-		{"internal/config/config.go", filepath.Join("workspace", "myrepo", "internal", "config", "config.go")},
-		{"./README.md", filepath.Join("workspace", "myrepo", "README.md")},
+		{"config.go", filepath.Join(absWorkspace(t), "myrepo", "config.go")},
+		{"internal/config/config.go", filepath.Join(absWorkspace(t), "myrepo", "internal", "config", "config.go")},
+		{"./README.md", filepath.Join(absWorkspace(t), "myrepo", "README.md")},
 	}
 
 	for _, tc := range testCases {
@@ -112,9 +113,9 @@ func TestRepositoryPath_Subdir(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"internal", filepath.Join("workspace", "myrepo", "internal")},
-		{"internal/config", filepath.Join("workspace", "myrepo", "internal", "config")},
-		{"./docs", filepath.Join("workspace", "myrepo", "docs")},
+		{"internal", filepath.Join(absWorkspace(t), "myrepo", "internal")},
+		{"internal/config", filepath.Join(absWorkspace(t), "myrepo", "internal", "config")},
+		{"./docs", filepath.Join(absWorkspace(t), "myrepo", "docs")},
 	}
 
 	for _, tc := range testCases {
@@ -132,7 +133,7 @@ func TestRepositoryPath_PathCleaning(t *testing.T) {
 	paths, _ := NewRepositoryPath("./workspace//", "myrepo")
 
 	root := paths.Root()
-	expected := filepath.Join("workspace", "myrepo")
+	expected := filepath.Join(absWorkspace(t), "myrepo")
 	if root != expected {
 		t.Errorf("Root() with redundant separators = %s, want %s", root, expected)
 	}
@@ -158,7 +159,7 @@ func TestRepositoryPath_NestedRepoNames(t *testing.T) {
 	paths, _ := NewRepositoryPath("./workspace", "myorg/myrepo")
 
 	root := paths.Root()
-	expected := filepath.Join("workspace", "myorg", "myrepo")
+	expected := filepath.Join(absWorkspace(t), "myorg", "myrepo")
 	if root != expected {
 		t.Errorf("Root() with nested repo name = %s, want %s", root, expected)
 	}
@@ -177,4 +178,14 @@ func BenchmarkRepositoryPath_File(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = paths.File("internal/config/config.go")
 	}
+}
+
+// absWorkspace is ./workspace resolved against the test's working directory.
+func absWorkspace(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(wd, "workspace")
 }

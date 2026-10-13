@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"intern/internal/config"
+	"intern/internal/repository"
 	"intern/internal/runner"
 	"intern/internal/ticketing"
 )
@@ -111,4 +112,42 @@ func TestAddWorktree_ReplacesStaleWorktree(t *testing.T) {
 		t.Error("worktree should be reset to master, not the old branch tip")
 	}
 	_ = repo
+}
+
+// A relative WORKING_DIR (the default ./workspace) must still give each
+// ticket a worktree it can work in: git resolves the worktree path from
+// inside the clone, the agent from its own working directory.
+func TestAddWorktree_RelativeWorkingDir(t *testing.T) {
+	root := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "master", "workspace/app"},
+		{"-C", "workspace/app", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	paths, err := repository.NewRepositoryPath("./workspace", "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{Cfg: &config.Config{BaseBranch: "master"}, RepoPaths: paths}
+
+	dir, cleanup, err := c.addWorktree(context.Background(), "feature/ip-13")
+	if err != nil {
+		t.Fatalf("addWorktree: %v", err)
+	}
+	defer cleanup()
+	if out, err := runCommandCapture(context.Background(), dir, "git", "rev-parse", "HEAD"); err != nil {
+		t.Fatalf("worktree %s isn't usable: %v %s", dir, err, out)
+	}
 }
