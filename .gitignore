@@ -30,7 +30,9 @@ go.work.sum
 
 # env file
 .env
+.env.bak
 .env.example
+slack-app-manifest.yaml
 agent_state.jsonc
 
 # Editor/IDE

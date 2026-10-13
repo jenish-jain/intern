@@ -1,0 +1,10 @@
+# Files gcloud leaves out of `gcloud run deploy --source` uploads.
+.git
+.gitignore
+.env
+.env.*
+agent_state.jsonc
+slack-app-manifest.yaml
+workspace/
+build/
+.tokensave/

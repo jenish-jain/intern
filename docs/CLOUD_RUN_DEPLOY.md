@@ -1,5 +1,7 @@
 # Cloud Run Deployment
 
+> `scripts/deploy-cloudrun.sh` does all of this from your `.env`, for Slack mode and team mode. See [SETUP.md](SETUP.md). This page explains the manual steps.
+
 Deploys the agent as a request-driven service: it scales to zero when idle
 and spins up on the first Slack event. Requires `TICKETING_MODE=slack`
 (see `docs/SLACK_SETUP.md`) — the JIRA polling loop (`agent start`) is a

@@ -14,7 +14,7 @@ Team mode runs intern as a small software team. A product owner talks to the **a
 
 ## Configuration
 
-Team mode is `agent serve` with `TICKETING_MODE=jira` and Slack configured. The JIRA poll loop runs in the background of the Slack endpoint.
+`scripts/setup.sh` asks for all of this and checks it; see [SETUP.md](SETUP.md). Team mode is `agent serve` with `TICKETING_MODE=jira` and Slack configured. The JIRA poll loop runs in the background of the Slack endpoint.
 
 | Variable | Purpose |
 |---|---|

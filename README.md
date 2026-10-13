@@ -8,6 +8,7 @@ An autonomous Go-based engineering assistant that reads JIRA tickets assigned to
 
 Intern can run as a small autonomous software team. A product owner shares requirements with the **architect** in Slack and approves the plan it proposes. The architect writes the PRD, architecture, decision records and a JIRA backlog of small, testable tickets. **Developers** build tickets in parallel in their own git worktrees, a **reviewer** reviews each PR, a **tester** writes acceptance tests from the ticket's criteria, and intern merges when CI passes. People answer questions, approve plans, and give feedback on each finished epic.
 
+- [docs/SETUP.md](docs/SETUP.md): set up in three commands with `scripts/setup.sh`, `agent doctor` and `scripts/deploy-cloudrun.sh`
 - [docs/TEAM_MODE.md](docs/TEAM_MODE.md): the end-to-end workflow, configuration and Slack setup
 - [docs/RUNNERS.md](docs/RUNNERS.md): the Claude Code runner, personas, sandboxes and the `.intern/project.yaml` contract
 
@@ -99,7 +100,7 @@ The agent uses an intelligent context selection system to optimize token usage w
 
 ## Requirements
 
-- Go 1.22+ (latest recommended)
+- Go 1.23+ or Docker (for `scripts/setup.sh`)
 - Access tokens for JIRA and GitHub
 - **AI Provider** (choose one):
   - **Anthropic Claude**: API key from [console.anthropic.com](https://console.anthropic.com)
@@ -107,26 +108,14 @@ The agent uses an intelligent context selection system to optimize token usage w
 
 ## Quick Start
 
-1. Clone the repo and install dependencies:
-   ```bash
-   go mod tidy
-   ```
-2. Initialize sample config files:
-   ```bash
-   go run cmd/agent/main.go --init
-   ```
-3. Edit `.env.example` and export/envsubst variables (or create `.env`)
+```bash
+scripts/setup.sh     # builds intern, writes .env interactively, checks every credential
+build/agent serve    # team or Slack mode; `build/agent start` for JIRA mode
+```
 
-4. **(Optional but recommended)** Build the file index for smart context selection:
-   ```bash
-   go run cmd/agent/main.go --build-index
-   ```
-   This creates a `.ai-intern/file_index.json` in your repository with metadata about all files. The agent will use this for intelligent file selection.
+[docs/SETUP.md](docs/SETUP.md) covers the credentials each mode needs, deploying to Cloud Run with `scripts/deploy-cloudrun.sh`, and troubleshooting. Run `build/agent doctor` after any configuration change.
 
-5. Run the agent:
-   ```bash
-   go run cmd/agent/main.go
-   ```
+For the legacy engine, building the file index improves context selection: `build/agent build-index` writes `.ai-intern/file_index.json` in the target repository.
 
 ## Configuration
 

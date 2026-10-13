@@ -1,0 +1,10 @@
+# Files left out of the Docker build context.
+.git
+
+.env
+.env.*
+agent_state.jsonc
+slack-app-manifest.yaml
+workspace/
+build/
+.tokensave/
