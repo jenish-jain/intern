@@ -72,7 +72,7 @@ type workOutcome struct {
 
 // runJob runs a job and turns a non-done status into an error.
 func (c *Coordinator) runJob(ctx context.Context, job runner.Job) (runner.Result, error) {
-	res, err := c.Runner.Run(ctx, job)
+	res, err := c.runModel(ctx, job)
 	if err != nil {
 		return res, err
 	}

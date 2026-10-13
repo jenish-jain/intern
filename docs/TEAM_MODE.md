@@ -28,11 +28,28 @@ Team mode runs intern as a small software team. A product owner talks to the **a
 | `ALLOWED_WRITE_DIRS=*` | Let developers create the project's own layout |
 | `TICKET_BUDGET_USD`, `MAX_REVIEW_ROUNDS`, `VERIFY_FIX_ATTEMPTS` | Cost and loop limits per job and per PR |
 | `PROJECT_BUDGET_USD` | Total spend cap across all roles. Reaching it pauses planning, new tickets, reviews and tests (announced once in the notify channel); merges of ready PRs continue |
+| `SLEEP_AFTER_FAILURES` | After this many model jobs in a row fail with an error only a person can fix (spend limit reached, credit exhausted, API key rejected), intern stops all work, says why in the notify channel, and scales its Cloud Run service to zero (default 3; 0 keeps retrying). See [Sleeping after an outage](#sleeping-after-an-outage) |
 | `MAX_CONCURRENT_TICKETS` | Jobs of each kind run at once, each in its own worktree: this many developers building tickets, and this many review, fix or test rounds on open PRs |
 
 The Slack app needs the `app_mentions:read`, `chat:write`, `im:history` and `channels:history` scopes (add `groups:history` for private channels). Subscribe to the `app_mention`, `message.im` and `message.channels` events, with the request URL `https://<host>/slack/events`.
 
 On Cloud Run the process must stay up for the poll loop: set minimum instances to 1 and CPU to always allocated. Cloud Run can't run Docker, so use `SANDBOX=local` there, or run on a VM or GKE for `SANDBOX=docker`.
+
+## Sleeping after an outage
+
+Some failures can't fix themselves: the Anthropic spend limit for the organization or workspace is reached, the credit balance runs out, or the API key is revoked. Retrying them only costs compute. After `SLEEP_AFTER_FAILURES` such failures in a row, intern goes to sleep:
+
+1. It stops starting any developer, review or test job. Tickets interrupted by the outage go back to To Do without using an attempt.
+2. It posts the reason in the notify channel, including when the API says access returns, if it says.
+3. On Cloud Run, it switches its own service to manual scaling with zero instances, so it stops using compute until woken.
+
+Fix the cause (for a spend limit, raise it at console.anthropic.com > Settings > Limits), then wake intern with the command from the Slack message:
+
+```bash
+gcloud run services update ai-intern-agent --project <project> --region <region> --scaling=auto
+```
+
+Waking starts a fresh instance that finds its tickets and open PRs again and carries on. Scaling to zero needs the service's runtime service account to have `run.services.update` on the service (for example `roles/run.developer` granted on that service). Without it, intern still stops all work and the Slack message gives the command to scale it down yourself.
 
 ## Starting with a human merge gate
 

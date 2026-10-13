@@ -57,6 +57,9 @@ func (c *Coordinator) comment(ctx context.Context, key, body string) {
 func (c *Coordinator) startTickets(ctx context.Context, tickets []ticketing.Ticket, process func(ctx context.Context, key, summary, description string) error) (*sync.WaitGroup, map[string]bool) {
 	var wg sync.WaitGroup
 	started := map[string]bool{}
+	if _, paused := c.modelPaused(); paused {
+		return &wg, started
+	}
 	for _, t := range tickets {
 		if ctx.Err() != nil {
 			break
@@ -141,6 +144,14 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 // returns the ticket to To Do so the next poll can retry it. Once the
 // attempt limit is reached the comment says retries have stopped.
 func (c *Coordinator) handleTicketFailure(ctx context.Context, t ticketing.Ticket, fingerprint string, err error) {
+	var outage *ModelUnavailableError
+	if errors.As(err, &outage) {
+		// Not the ticket's fault and not an attempt: put it back for when
+		// the API is available again. The outage was announced once.
+		logger.Warn("Ticket paused: model API unavailable", "ticket", t.Key, "reason", outage.Reason)
+		c.setStatus(ctx, t.Key, ticketing.StatusToDo)
+		return
+	}
 	n := c.State.RecordFailure(t.Key, fingerprint)
 	limit := c.Cfg.MaxTicketAttempts
 	logger.Error("Failed processing ticket", "key", t.Key, "error", err, "attempt", n, "limit", limit)
@@ -161,7 +172,11 @@ func (c *Coordinator) handleTicketFailure(ctx context.Context, t ticketing.Ticke
 		body = fmt.Sprintf("intern attempt %d of %d failed:\n%s", n, limit, msg)
 		if n >= limit {
 			body += "\n\nI've stopped retrying this ticket. Edit its summary or description to clarify it, and I'll try again on the next poll."
+			c.notify(ctx, fmt.Sprintf(":x: %s failed %d times and intern stopped retrying it: %s\nEdit the ticket to retry.", t.Key, n, msg))
 		}
+	}
+	if nh != nil {
+		c.notify(ctx, fmt.Sprintf(":raising_hand: %s needs more information before intern can finish it; the questions are on the ticket.", t.Key))
 	}
 	c.comment(ctx, t.Key, body)
 	c.setStatus(ctx, t.Key, ticketing.StatusToDo)

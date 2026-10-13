@@ -5,8 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	logger "github.com/jenish-jain/logger"
 )
 
 // Job kinds. Developers build new tickets; flow jobs review, fix and test
@@ -113,6 +111,7 @@ func runsModel(s Stage) bool {
 // waiting for the jobs it started; the returned group waits for them.
 func (c *Coordinator) startFlows(ctx context.Context) *sync.WaitGroup {
 	var wg sync.WaitGroup
+	_, paused := c.modelPaused()
 	for _, f := range c.State.ListFlows() {
 		if ctx.Err() != nil {
 			break
@@ -123,13 +122,16 @@ func (c *Coordinator) startFlows(ctx context.Context) *sync.WaitGroup {
 		}
 		if !runsModel(f.Stage) {
 			if err := c.advanceFlow(ctx, &f); err != nil {
-				logger.Error("Flow step failed", "ticket", f.TicketKey, "stage", f.Stage, "error", err)
+				c.flowStepFailed(ctx, f, err)
 			}
 			continue
 		}
+		if paused {
+			continue // the model API is unavailable; see outage.go
+		}
 		c.spawn(f.TicketKey, jobFlow, &wg, func() {
 			if err := c.advanceFlow(ctx, &f); err != nil {
-				logger.Error("Flow step failed", "ticket", f.TicketKey, "stage", f.Stage, "error", err)
+				c.flowStepFailed(ctx, f, err)
 			}
 		})
 	}

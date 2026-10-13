@@ -118,6 +118,12 @@ type Config struct {
 	// ProjectBudgetUSD caps total model spend across all roles; reaching
 	// it pauses new work (0 = no cap).
 	ProjectBudgetUSD float64
+	// SleepAfterFailures puts intern to sleep after this many model jobs
+	// in a row fail with an error only a person can fix (a spend limit, no
+	// credit, a rejected key): all work stops and, on Cloud Run, the
+	// service scales itself to zero until woken (default 3; 0 never
+	// sleeps and keeps retrying).
+	SleepAfterFailures int
 
 	DryRun bool // If true, process tickets but don't create PRs (preview mode)
 
@@ -210,6 +216,8 @@ func LoadConfig() (*Config, error) {
 		TicketBudgetUSD:   viper.GetFloat64("TICKET_BUDGET_USD"),
 		ProjectBudgetUSD:  viper.GetFloat64("PROJECT_BUDGET_USD"),
 
+		SleepAfterFailures: viper.GetInt("SLEEP_AFTER_FAILURES"),
+
 		DryRun: viper.GetBool("DRY_RUN"),
 
 		MetricsEnabled: viper.GetBool("METRICS_ENABLED"),
@@ -259,6 +267,9 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.MaxTicketAttempts <= 0 {
 		cfg.MaxTicketAttempts = 3
+	}
+	if !viper.IsSet("SLEEP_AFTER_FAILURES") {
+		cfg.SleepAfterFailures = 3
 	}
 	// Self-healing defaults
 	if cfg.SelfHealMaxAttempts <= 0 {

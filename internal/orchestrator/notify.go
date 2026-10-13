@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	logger "github.com/jenish-jain/logger"
 )
@@ -56,4 +58,21 @@ func (c *Coordinator) PRURLFor(key string) string {
 		return e.PRURL
 	}
 	return ""
+}
+
+// flowStepFailed logs a failed review, fix, test or merge step and
+// announces it in Slack the first time a PR's step fails with a given
+// error, so a stuck PR is visible without reading logs. An outage is
+// announced by runModel instead.
+func (c *Coordinator) flowStepFailed(ctx context.Context, f Flow, err error) {
+	logger.Error("Flow step failed", "ticket", f.TicketKey, "stage", f.Stage, "error", err)
+	var outage *ModelUnavailableError
+	if errors.As(err, &outage) {
+		return
+	}
+	msg := truncateNotes(err.Error(), 300)
+	if _, seen := c.notified.LoadOrStore(f.TicketKey+"|"+string(f.Stage)+"|"+msg, true); seen {
+		return
+	}
+	c.notify(ctx, fmt.Sprintf(":warning: %s's %s step failed and will be retried on the next poll: %s\n%s", f.TicketKey, f.Stage, msg, f.PRURL))
 }

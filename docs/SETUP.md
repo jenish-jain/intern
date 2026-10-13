@@ -121,6 +121,7 @@ Slack mode: `@intern add a /healthz endpoint that returns 200`. JIRA mode: assig
 | Tickets never start | Check `agent doctor`: the agent user, the statuses, and that tickets are assigned to `AGENT_USERNAME`. Tickets also wait for every ticket that blocks them to be done. |
 | Planning stopped after a redeploy | Conversation state lives in the instance; a new revision starts empty. Start a new thread with the latest requirements. |
 | `The project budget is used up` | Raise `PROJECT_BUDGET_USD` in `.env` and redeploy. |
+| Slack says intern is going to sleep | The model API refused every request, for example because the Anthropic spend limit was reached. Fix the cause, then run the wake command from the message. See [TEAM_MODE.md](TEAM_MODE.md#sleeping-after-an-outage). |
 
 ## Changing settings
 
