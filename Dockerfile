@@ -24,10 +24,14 @@ RUN apk add --no-cache ca-certificates git
 # can't run Docker, so on Cloud Run the agent runs in this container with
 # a scrubbed environment (see internal/sandbox).
 ARG CLAUDE_CODE_VERSION=latest
-RUN apk add --no-cache nodejs npm \
+# Claude Code's Bash tool needs bash (or zsh) and SHELL pointing at it;
+# Alpine ships neither, and without them every command the agent runs fails
+# with "No suitable shell found".
+RUN apk add --no-cache bash nodejs npm \
  && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && rm -rf /root/.npm
-ENV DISABLE_AUTOUPDATER=1
+ENV DISABLE_AUTOUPDATER=1 \
+    SHELL=/bin/bash
 
 WORKDIR /app
 COPY --from=build /out/agent /app/agent

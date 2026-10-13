@@ -155,8 +155,9 @@ func TestLinkBlocks_Direction(t *testing.T) {
 		t.Fatalf("LinkBlocks: %v", err)
 	}
 	body := (*reqs)[0].body
-	if body["outwardIssue"].(map[string]any)["key"] != "P-1" || body["inwardIssue"].(map[string]any)["key"] != "P-2" {
-		t.Errorf("unexpected link body %+v", body)
+	// P-1 blocks P-2: JIRA's create API takes the blocker as inwardIssue.
+	if body["inwardIssue"].(map[string]any)["key"] != "P-1" || body["outwardIssue"].(map[string]any)["key"] != "P-2" {
+		t.Errorf("P-1 must be the inwardIssue to block P-2, got %+v", body)
 	}
 }
 

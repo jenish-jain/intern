@@ -116,7 +116,10 @@ func healthy() *fakeServices {
 }
 
 func TestDoctor_AllHealthy(t *testing.T) {
-	res := runDoctor(t, healthy(), nil, map[string]bool{"git": true, "claude": true})
+	res := runDoctor(t, healthy(), nil, map[string]bool{"git": true, "claude": true, "bash": true})
+	if _, ok := res["Shell"]; ok {
+		t.Error("no shell problem to report when bash is installed")
+	}
 	for _, name := range []string{"git", "Claude Code CLI", "GitHub", "Base branch", "JIRA", "JIRA project", "JIRA workflow", "JIRA agent user", "Slack", "Anthropic"} {
 		r, ok := res[name]
 		if !ok {
@@ -161,6 +164,9 @@ func TestDoctor_ReportsEachProblemWithAFix(t *testing.T) {
 	}
 
 	res = runDoctor(t, f, nil, map[string]bool{"git": true, "claude": true})
+	if r := res["Shell"]; r.Status != StatusFail {
+		t.Errorf("claude without bash or zsh should fail, got %v %q", r.Status, r.Detail)
+	}
 	if r := res["JIRA workflow"]; r.Status != StatusWarn || !strings.Contains(r.Detail, "In Review") {
 		t.Errorf("JIRA workflow should warn about In Review, got %v %q", r.Status, r.Detail)
 	}
