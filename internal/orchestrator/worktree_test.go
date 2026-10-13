@@ -53,6 +53,11 @@ func TestProcessTicket_ParallelWorktrees(t *testing.T) {
 	tickets := []ticketing.Ticket{{Key: "P-10", Summary: "ten"}, {Key: "P-11", Summary: "eleven"}}
 	c.dispatchTickets(ctx, tickets, c.processTicket)
 
+	// A ticket's branch is rebuilt from the base on every attempt, so its
+	// first push replaces whatever an interrupted attempt pushed.
+	if len(repo.forcePushes) != 2 {
+		t.Errorf("each ticket's first push should be a force push, got %v", repo.forcePushes)
+	}
 	if atomic.LoadInt32(&pr.peak) != 2 {
 		t.Errorf("tickets did not run in parallel (peak %d)", pr.peak)
 	}

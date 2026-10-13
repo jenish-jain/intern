@@ -69,6 +69,9 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 				"ticket", t.Key, "attempts", n, "limit", c.Cfg.MaxTicketAttempts)
 			continue
 		}
+		if t.Status == "In Progress" {
+			logger.Info("Resuming ticket left In Progress by an interrupted run", "ticket", t.Key)
+		}
 		if open := t.OpenBlockers(); len(open) > 0 {
 			logger.Info("Deferring ticket - blocked by unfinished tickets", "ticket", t.Key, "blocked_by", open)
 			continue

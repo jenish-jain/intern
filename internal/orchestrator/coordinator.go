@@ -355,7 +355,7 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	c.remoteMu.Lock()
 	defer c.remoteMu.Unlock()
 	pushErr, pushAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-		return MakeTransient(c.Repository.Push(ctx, branchName))
+		return MakeTransient(c.Repository.ForcePush(ctx, branchName))
 	})
 	c.Metrics.AddRetries(pushAttempts)
 	if pushErr != nil {

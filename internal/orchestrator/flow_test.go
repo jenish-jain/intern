@@ -24,6 +24,7 @@ type flowRepo struct {
 	reviews       []string
 	comments      []string
 	pushes        []string
+	forcePushes   []string
 	merges        []string
 	mergeErr      error
 	prHeads       []string // head branches of PRs opened through CreatePullRequest
@@ -60,6 +61,12 @@ func (r *flowRepo) Push(_ context.Context, b string) error {
 	defer r.mu.Unlock()
 	r.pushes = append(r.pushes, b)
 	return nil
+}
+func (r *flowRepo) ForcePush(ctx context.Context, b string) error {
+	r.mu.Lock()
+	r.forcePushes = append(r.forcePushes, b)
+	r.mu.Unlock()
+	return r.Push(ctx, b)
 }
 func (r *flowRepo) FetchBranch(context.Context, string) error { return nil }
 func (r *flowRepo) GetPR(context.Context, string) (repository.PRState, error) {

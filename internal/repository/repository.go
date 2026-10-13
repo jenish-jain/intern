@@ -15,6 +15,9 @@ type RepositoryClient interface {
 	AddFile(ctx context.Context, filePath string) error
 	Commit(ctx context.Context, message string) error
 	Push(ctx context.Context, branchName string) error
+	// ForcePush pushes a branch intern owns outright, replacing whatever an
+	// earlier, interrupted attempt left on the remote.
+	ForcePush(ctx context.Context, branchName string) error
 	CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error)
 	HasLocalChanges(ctx context.Context) (bool, error)
 	IsPRMerged(ctx context.Context, prURL string) (bool, error)
@@ -58,6 +61,10 @@ func (r *RepositoryService) Commit(ctx context.Context, message string) error {
 
 func (r *RepositoryService) Push(ctx context.Context, branchName string) error {
 	return r.Client.Push(ctx, branchName)
+}
+
+func (r *RepositoryService) ForcePush(ctx context.Context, branchName string) error {
+	return r.Client.ForcePush(ctx, branchName)
 }
 
 func (r *RepositoryService) CreatePullRequest(ctx context.Context, baseBranch, headBranch, title, body string) (string, error) {

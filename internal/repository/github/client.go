@@ -207,6 +207,17 @@ func (c *githubClient) Commit(ctx context.Context, message string) error {
 }
 
 func (c *githubClient) Push(ctx context.Context, branchName string) error {
+	return c.push(ctx, branchName, false)
+}
+
+// ForcePush replaces the remote branch. It's for a ticket's first push: each
+// attempt rebuilds the branch from the base, so a branch pushed by an
+// interrupted earlier attempt would otherwise reject the push.
+func (c *githubClient) ForcePush(ctx context.Context, branchName string) error {
+	return c.push(ctx, branchName, true)
+}
+
+func (c *githubClient) push(ctx context.Context, branchName string, force bool) error {
 	repoPath := c.paths.Root()
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
@@ -214,6 +225,9 @@ func (c *githubClient) Push(ctx context.Context, branchName string) error {
 	}
 
 	refspec := fmt.Sprintf("refs/heads/%s:refs/heads/%s", branchName, branchName)
+	if force {
+		refspec = "+" + refspec
+	}
 	err = repo.PushContext(ctx, &git.PushOptions{
 		Auth:     &http.BasicAuth{Username: c.owner, Password: c.token},
 		RefSpecs: []config.RefSpec{config.RefSpec(refspec)},
