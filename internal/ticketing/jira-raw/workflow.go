@@ -126,14 +126,15 @@ func (c *client) CreateTicket(ctx context.Context, t ticketing.NewTicket) (strin
 }
 
 // LinkBlocks creates a "Blocks" link so that blockerKey blocks blockedKey.
-// In JIRA's issueLink API the outward issue carries the outward
-// description ("blocks") and the inward issue the inward one ("is blocked
-// by").
+// JIRA's create-link API is the reverse of how links read: the
+// inwardIssue is the one that "blocks" and the outwardIssue the one that
+// "is blocked by". Verified on JIRA Cloud: inwardIssue A, outwardIssue B
+// shows on B as "is blocked by A", which is what blockers() parses.
 func (c *client) LinkBlocks(ctx context.Context, blockerKey, blockedKey string) error {
 	body := map[string]any{
 		"type":         map[string]string{"name": "Blocks"},
-		"outwardIssue": map[string]string{"key": blockerKey},
-		"inwardIssue":  map[string]string{"key": blockedKey},
+		"inwardIssue":  map[string]string{"key": blockerKey},
+		"outwardIssue": map[string]string{"key": blockedKey},
 	}
 	resp, err := c.makeRequest(ctx, "POST", "/rest/api/3/issueLink", body)
 	if err != nil {

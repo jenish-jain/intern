@@ -127,6 +127,14 @@ func (d *Doctor) tools(ctx context.Context) []Result {
 			v, _ := d.Exec(ctx, "claude", "--version")
 			out = append(out, ok("Claude Code CLI", strings.TrimSpace(string(v))))
 		}
+		// Claude Code's Bash tool needs bash or zsh; with neither, every
+		// command the developer runs fails with "No suitable shell found".
+		_, bashErr := d.LookPath("bash")
+		_, zshErr := d.LookPath("zsh")
+		if bashErr != nil && zshErr != nil && d.Cfg.Sandbox != "docker" {
+			out = append(out, fail("Shell", "neither bash nor zsh is installed, so Claude Code can't run commands",
+				"Install bash and set SHELL=/bin/bash (the intern Docker image does both).", "AI_RUNNER"))
+		}
 		if d.Cfg.Sandbox == "docker" {
 			if _, err := d.Exec(ctx, "docker", "image", "inspect", d.Cfg.SandboxImage); err != nil {
 				out = append(out, fail("Docker sandbox", "image "+d.Cfg.SandboxImage+" not found or Docker not running",
