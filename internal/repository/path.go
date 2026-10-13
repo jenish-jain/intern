@@ -29,8 +29,13 @@ func NewRepositoryPath(workingDir, repoName string) (*RepositoryPath, error) {
 		return nil, fmt.Errorf("repository name cannot be empty")
 	}
 
-	// Clean paths to normalize separators and remove redundant elements
-	cleanWorkingDir := filepath.Clean(workingDir)
+	// Resolve the working directory to an absolute path: git, worktrees and
+	// sandboxes run commands from other directories, where a relative path
+	// like ./workspace would point somewhere else.
+	cleanWorkingDir, err := filepath.Abs(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve working directory %s: %w", workingDir, err)
+	}
 	cleanRepoName := filepath.Clean(repoName)
 
 	// Security: prevent path traversal
@@ -47,7 +52,7 @@ func NewRepositoryPath(workingDir, repoName string) (*RepositoryPath, error) {
 // Root returns the absolute path to the repository root directory.
 // This is the base path for all repository operations.
 //
-// Example: "./workspace/myrepo"
+// Example: "/app/workspace/myrepo"
 func (p *RepositoryPath) Root() string {
 	return filepath.Join(p.workingDir, p.repoName)
 }
