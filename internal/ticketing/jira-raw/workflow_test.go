@@ -225,3 +225,24 @@ func TestCreateTicket_Assignee(t *testing.T) {
 		t.Errorf("assignee = %v", got)
 	}
 }
+
+// Tickets left In Progress by a run that was interrupted (a restart or
+// deploy) must be fetched again, or they're stranded forever.
+func TestGetTickets_IncludesInterruptedInProgress(t *testing.T) {
+	var jql string
+	c, _ := newTestClient(t, func(r *http.Request) (int, string) {
+		jql = r.URL.Query().Get("jql")
+		return 200, `{"issues":[]}`
+	})
+	if _, err := c.GetTickets(context.Background(), "intern", "IP"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"statusCategory = 'To Do'", "status = 'In Progress'", "assignee = 'intern'", "project = 'IP'"} {
+		if !strings.Contains(jql, want) {
+			t.Errorf("JQL %q missing %q", jql, want)
+		}
+	}
+	if strings.Contains(jql, "In Review") {
+		t.Errorf("In Review tickets belong to their PR flow, not the ticket poll: %q", jql)
+	}
+}
