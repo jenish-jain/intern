@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"intern/internal/ticketing"
+
+	"github.com/jenish-jain/logger"
 )
 
 // issueFields is the field list requested whenever issues are read.
@@ -24,10 +26,13 @@ type transitionsResponse struct {
 	} `json:"transitions"`
 }
 
-// findTransitionID returns the ID of the transition available on the
-// ticket that leads to status. It matches the target status name first,
-// then the transition's own name, both case-insensitively.
-func (c *client) findTransitionID(ctx context.Context, ticketKey, status string) (string, error) {
+// findTransitionID picks the transition that moves ticketKey to status.
+// A configured ID is used only if JIRA says it leads to that status: IDs
+// differ between workflows, and a stale one (say, the 31 that means "Done"
+// in one project and "In Review" in another) would otherwise succeed while
+// moving the ticket somewhere else. Without a usable ID the transition is
+// found by its target status name, then by its own name.
+func (c *client) findTransitionID(ctx context.Context, ticketKey, status, configuredID string) (string, error) {
 	endpoint := fmt.Sprintf("/rest/api/3/issue/%s/transitions", url.PathEscape(ticketKey))
 	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
@@ -41,6 +46,18 @@ func (c *client) findTransitionID(ctx context.Context, ticketKey, status string)
 	var tr transitionsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
 		return "", fmt.Errorf("decode transitions for %s: %w", ticketKey, err)
+	}
+	if configuredID != "" {
+		for _, t := range tr.Transitions {
+			if t.ID != configuredID {
+				continue
+			}
+			if strings.EqualFold(t.To.Name, status) {
+				return t.ID, nil
+			}
+			logger.Warn("Configured JIRA transition leads to a different status; finding one by name instead",
+				"ticket", ticketKey, "want", status, "transition_id", configuredID, "leads_to", t.To.Name)
+		}
 	}
 	for _, t := range tr.Transitions {
 		if strings.EqualFold(t.To.Name, status) {

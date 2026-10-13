@@ -211,16 +211,13 @@ func (c *client) GetTickets(ctx context.Context, assignee, project string) ([]ti
 }
 
 // UpdateTicketStatus transitions a ticket to a new status. A transition ID
-// configured in transitions wins; otherwise the transition is looked up by
-// target status name, so new workflow statuses need no extra config.
+// configured in transitions is used when it really leads to that status;
+// otherwise the transition is looked up by target status name, so new
+// workflow statuses need no extra config.
 func (c *client) UpdateTicketStatus(ctx context.Context, ticketKey, status string, transitions map[string]string) error {
-	transitionID := transitions[status]
-	if transitionID == "" {
-		id, err := c.findTransitionID(ctx, ticketKey, status)
-		if err != nil {
-			return err
-		}
-		transitionID = id
+	transitionID, err := c.findTransitionID(ctx, ticketKey, status, transitions[status])
+	if err != nil {
+		return err
 	}
 
 	// URL encode the ticket key to handle special characters
