@@ -161,14 +161,17 @@ docker-run: ## Run Docker container
 config-sample: build ## Generate sample configuration files
 	./$(BUILD_DIR)/$(BINARY_NAME) --init
 
-.PHONY: config-validate
-config-validate: build ## Validate configuration
-	@echo "Validating configuration..."
-	@if [ -f configs/config.yaml ]; then \
-		echo "Configuration file found"; \
-	else \
-		echo "No configuration file found. Run 'make config-sample' first"; \
-	fi
+.PHONY: configure
+configure: build ## Interactively write .env and check it (agent setup)
+	./$(BUILD_DIR)/$(BINARY_NAME) setup
+
+.PHONY: doctor
+doctor: build ## Check .env against GitHub, JIRA, Slack and Anthropic
+	./$(BUILD_DIR)/$(BINARY_NAME) doctor
+
+.PHONY: deploy-cloudrun
+deploy-cloudrun: ## Deploy to Cloud Run from .env (see docs/SETUP.md)
+	./scripts/deploy-cloudrun.sh
 
 # Development setup
 .PHONY: setup

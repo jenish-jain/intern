@@ -1,5 +1,7 @@
 # Slack Setup
 
+> Quicker: `agent slack-manifest` prints an app manifest with every scope and event intern uses; create the app from it (Create New App → From an app manifest). See [SETUP.md](SETUP.md).
+
 Lets you assign tasks to the agent and get status updates from a Slack conversation
 instead of requiring a JIRA account. This is the `TICKETING_MODE=slack` path,
 served over HTTP via `agent serve` (see `docs/CLOUD_RUN_DEPLOY.md` for deploying it).
