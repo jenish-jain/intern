@@ -24,6 +24,9 @@ const (
 	StageTest             Stage = "testing"
 	StageMerge            Stage = "ready-to-merge"
 	StageNeedsHuman       Stage = "needs-human"
+	// StageQueued is approved and tested, waiting for earlier tickets in
+	// the plan to merge first, so PRs merge in plan order.
+	StageQueued Stage = "queued"
 )
 
 // LabelResume is added by a human to a needs-human PR to send it back
@@ -87,7 +90,30 @@ func (c *Coordinator) startFlow(ctx context.Context, key, summary, description, 
 		TicketKey: key, Summary: summary, Description: description,
 		Branch: branch, PRURL: prURL, CostUSD: cost, CreatedAt: now,
 	}
-	c.moveFlow(ctx, &f, stage)
+	c.moveFlowInOrder(ctx, &f, stage)
+}
+
+// moveFlowInOrder is moveFlow, except that a PR becomes ready to merge only
+// when no earlier ticket in the plan is still open; until then it waits as
+// queued. A small PR reviewed and tested first still merges in plan order.
+func (c *Coordinator) moveFlowInOrder(ctx context.Context, f *Flow, to Stage) {
+	if to != StageMerge {
+		c.moveFlow(ctx, f, to)
+		return
+	}
+	blocker := c.mergeBlocker(f.TicketKey)
+	if blocker == "" {
+		c.moveFlow(ctx, f, StageMerge)
+		return
+	}
+	if f.Stage != StageQueued {
+		msg := fmt.Sprintf("**intern: queued.** This PR is approved and tested, and waits for %s to merge first so PRs merge in plan order. It will be marked `%s` then.", blocker, stageLabel(StageMerge))
+		if err := c.Repository.CommentPR(ctx, f.PRURL, msg); err != nil {
+			logger.Warn("Failed to comment on PR", "pr", f.PRURL, "error", err)
+		}
+		logger.Info("PR queued behind an earlier ticket", "ticket", f.TicketKey, "waiting_for", blocker)
+	}
+	c.moveFlow(ctx, f, StageQueued)
 }
 
 // moveFlow sets the flow's stage, swaps the PR label and persists it.
@@ -129,32 +155,6 @@ func (c *Coordinator) escalate(ctx context.Context, f *Flow, reason string) {
 	c.moveFlow(ctx, f, StageNeedsHuman)
 }
 
-// advanceFlows moves every open flow one step. It runs before new tickets
-// are started so in-flight work finishes first.
-func (c *Coordinator) advanceFlows(ctx context.Context) {
-	flows := c.State.ListFlows()
-	if len(flows) == 0 {
-		return
-	}
-	for _, f := range flows {
-		if ctx.Err() != nil {
-			break
-		}
-		f := f
-		if err := c.advanceFlow(ctx, &f); err != nil {
-			logger.Error("Flow step failed", "ticket", f.TicketKey, "stage", f.Stage, "error", err)
-		}
-	}
-	// New ticket branches are created from HEAD, so leave the clone on the
-	// base branch rather than on whichever PR branch ran last.
-	if err := discardLocalChanges(ctx, c.RepoPaths.Root()); err != nil {
-		logger.Warn("Could not clean agent clone", "error", err)
-	}
-	if err := c.Repository.SwitchBranch(ctx, c.baseBranch()); err != nil {
-		logger.Error("Failed to return to base branch after flows", "error", err)
-	}
-}
-
 func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 	pr, err := c.Repository.GetPR(ctx, f.PRURL)
 	if err != nil {
@@ -176,7 +176,19 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 		return c.runDeveloperFix(ctx, f)
 	case StageTest:
 		return c.runTest(ctx, f)
+	case StageQueued:
+		if c.mergeBlocker(f.TicketKey) == "" {
+			logger.Info("Earlier tickets merged; PR is next in plan order", "ticket", f.TicketKey)
+			c.moveFlow(ctx, f, StageMerge)
+		}
+		return nil
 	case StageMerge:
+		// An earlier ticket's PR can reappear, e.g. tracked again after a
+		// restart; never merge ahead of it.
+		if c.mergeBlocker(f.TicketKey) != "" {
+			c.moveFlowInOrder(ctx, f, StageMerge)
+			return nil
+		}
 		if c.Cfg.AutoMerge {
 			return c.runMerge(ctx, f, pr)
 		}
@@ -200,22 +212,6 @@ func (c *Coordinator) advanceFlow(ctx context.Context, f *Flow) error {
 	}
 }
 
-// checkoutFlowBranch puts the shared clone on the flow's branch at the
-// remote head.
-func (c *Coordinator) checkoutFlowBranch(ctx context.Context, f *Flow) (string, error) {
-	repoRoot := c.RepoPaths.Root()
-	if err := discardLocalChanges(ctx, repoRoot); err != nil {
-		logger.Warn("Could not clean agent clone", "error", err)
-	}
-	if err := c.Repository.FetchBranch(ctx, f.Branch); err != nil && err != repository.ErrUnsupported {
-		return "", fmt.Errorf("fetch branch: %w", err)
-	}
-	if err := c.Repository.SwitchBranch(ctx, f.Branch); err != nil {
-		return "", fmt.Errorf("switch to %s: %w", f.Branch, err)
-	}
-	return repoRoot, nil
-}
-
 func (c *Coordinator) baseBranch() string {
 	if c.Cfg.BaseBranch != "" {
 		return c.Cfg.BaseBranch
@@ -225,10 +221,11 @@ func (c *Coordinator) baseBranch() string {
 
 // runReview runs the reviewer and posts its verdict.
 func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
-	repoRoot, err := c.checkoutFlowBranch(ctx, f)
+	repoRoot, cleanup, err := c.flowWorktree(ctx, f)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	res, err := c.Runner.Run(ctx, runner.Job{
 		Role: runner.RoleReviewer, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(),
@@ -236,8 +233,6 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 	})
 	f.CostUSD += res.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleReviewer, res.Usage.CostUSD)
-	// Reviewers can't edit, but never let stray files reach a later stage.
-	_ = discardLocalChanges(ctx, repoRoot)
 	if err != nil {
 		return err
 	}
@@ -268,7 +263,7 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 
 	if res.Review.Approve {
 		c.team.count(&c.team.approvals)
-		c.moveFlow(ctx, f, c.stageAfterReview())
+		c.moveFlowInOrder(ctx, f, c.stageAfterReview())
 		return nil
 	}
 	c.team.count(&c.team.rejections)
@@ -295,10 +290,11 @@ func reviewFeedback(res runner.Result) string {
 // runDeveloperFix has the developer address feedback on the PR branch,
 // then pushes and sends the PR back to review.
 func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
-	repoRoot, err := c.checkoutFlowBranch(ctx, f)
+	repoRoot, cleanup, err := c.flowWorktree(ctx, f)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	base, err := gate.HeadSHA(ctx, repoRoot)
 	if err != nil {
 		return err
@@ -319,7 +315,7 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 		c.escalate(ctx, f, "the developer could not address the feedback: "+truncateNotes(err.Error(), 500))
 		return nil
 	}
-	if err := c.Repository.Push(ctx, f.Branch); err != nil {
+	if err := c.push(ctx, f.Branch, false); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
 	msg := fmt.Sprintf("**intern developer: addressed feedback** (round %d)\n\n%s", f.FixRounds, out.Result.Summary)
@@ -338,10 +334,11 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 // Tests it adds are committed and pushed whatever the outcome, so the
 // developer sees exactly what failed.
 func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
-	repoRoot, err := c.checkoutFlowBranch(ctx, f)
+	repoRoot, cleanup, err := c.flowWorktree(ctx, f)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	base, err := gate.HeadSHA(ctx, repoRoot)
 	if err != nil {
 		return err
@@ -393,7 +390,7 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 	}
 	checks, verifyOK := project.RunCommands(ctx, repoRoot, cmds)
 	if len(changes) > 0 {
-		if err := c.Repository.Push(ctx, f.Branch); err != nil {
+		if err := c.push(ctx, f.Branch, false); err != nil {
 			return fmt.Errorf("push: %w", err)
 		}
 	}
@@ -416,7 +413,7 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 
 	if passed {
 		c.team.count(&c.team.testPasses)
-		c.moveFlow(ctx, f, StageMerge)
+		c.moveFlowInOrder(ctx, f, StageMerge)
 		return nil
 	}
 	c.team.count(&c.team.testFails)

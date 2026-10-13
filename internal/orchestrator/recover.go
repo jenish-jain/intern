@@ -51,6 +51,7 @@ func (c *Coordinator) trackReviewTicket(ctx context.Context, t ticketing.Ticket)
 	if stage == "" {
 		return // no review, test or merge stages: a person merges
 	}
+	// advanceFlow re-checks plan order for ready and queued PRs.
 	now := time.Now()
 	f := Flow{
 		TicketKey: t.Key, Summary: t.Summary, Description: t.Description,
@@ -74,7 +75,7 @@ func stageFromLabels(labels []string) Stage {
 			continue
 		}
 		switch st := Stage(s); st {
-		case StageReview, StageChangesRequested, StageTest, StageMerge, StageNeedsHuman:
+		case StageReview, StageChangesRequested, StageTest, StageMerge, StageQueued, StageNeedsHuman:
 			return st
 		}
 	}
