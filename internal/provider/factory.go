@@ -35,7 +35,7 @@ func NewAgent(cfg *config.Config) (agent.Agent, error) {
 		if cfg.AnthropicAPIKey == "" {
 			return nil, fmt.Errorf("Anthropic API key is required for provider 'anthropic'")
 		}
-		baseAgent = anthropic.NewClient(cfg.AnthropicAPIKey)
+		baseAgent = anthropic.NewClient(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 
 	case "ollama":
 		if cfg.OllamaModel == "" {
@@ -56,9 +56,9 @@ func NewAgent(cfg *config.Config) (agent.Agent, error) {
 
 	// Wrap agent with circuit breaker for reliability
 	cbConfig := circuitbreaker.Config{
-		MaxFailures:           5,              // Open after 5 consecutive failures
+		MaxFailures:           5,                // Open after 5 consecutive failures
 		Timeout:               30 * time.Second, // Test recovery after 30s
-		MaxConcurrentHalfOpen: 1,              // Only one test request when recovering
+		MaxConcurrentHalfOpen: 1,                // Only one test request when recovering
 	}
 
 	return agent.NewCircuitBreakerAgent(baseAgent, cbConfig), nil

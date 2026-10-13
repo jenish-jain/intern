@@ -26,8 +26,11 @@ JIRA_URL="https://company.atlassian.net"
 JIRA_EMAIL="ai-agent@company.com"
 JIRA_API_TOKEN="your-jira-api-token"
 JIRA_PROJECT_KEY="PROJ"
+# Transition IDs are optional: when unset, the agent looks up the
+# transition by target status name ("To Do", "In Progress", "In Review", "Done").
 JIRA_TRANSITION_TO_DO="11"
 JIRA_TRANSITION_IN_PROGRESS="21"
+JIRA_TRANSITION_IN_REVIEW=""
 JIRA_TRANSITION_DONE="31"
 
 # Slack Configuration (required if TICKETING_MODE=slack)
@@ -46,6 +49,14 @@ AI_PROVIDER="anthropic"
 
 # Anthropic Configuration (required if AI_PROVIDER=anthropic)
 ANTHROPIC_API_KEY="your-anthropic-api-key"
+ANTHROPIC_MODEL=""  # optional; defaults to claude-opus-4-5-20251101
+
+# Runner: "legacy" or "claude-code" (see docs/RUNNERS.md)
+AI_RUNNER="legacy"
+SANDBOX="local"          # or "docker" with SANDBOX_IMAGE
+CLAUDE_MODEL=""          # e.g. "opus"; empty uses the CLI default
+TICKET_BUDGET_USD=5
+VERIFY_FIX_ATTEMPTS=2
 
 # Ollama Configuration (required if AI_PROVIDER=ollama)
 # Make sure Ollama is running locally: https://ollama.ai
@@ -55,6 +66,7 @@ OLLAMA_MODEL="qwen2.5-coder:7b"  # Options: qwen2.5-coder:7b, deepseek-coder:6.7
 AGENT_USERNAME="ai-intern"
 POLLING_INTERVAL="30s"
 MAX_CONCURRENT_TICKETS=1
+MAX_TICKET_ATTEMPTS=3
 
 WORKING_DIR="./workspace"  # Will be ./workspace/{GITHUB_REPO} automatically
 BASE_BRANCH="master"

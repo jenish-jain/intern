@@ -403,3 +403,61 @@ func TestConfig_Validate_EdgeCases(t *testing.T) {
 		}
 	})
 }
+
+func TestConfig_Validate_Runner(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string
+	}{
+		{"claude-code local", func(c *Config) { c.AIRunner = "claude-code"; c.Sandbox = "local" }, ""},
+		{"claude-code docker needs image", func(c *Config) { c.AIRunner = "claude-code"; c.Sandbox = "docker" }, "SANDBOX_IMAGE"},
+		{"claude-code docker with image", func(c *Config) {
+			c.AIRunner = "claude-code"
+			c.Sandbox = "docker"
+			c.SandboxImage = "intern-sandbox:latest"
+		}, ""},
+		{"unknown sandbox", func(c *Config) { c.AIRunner = "claude-code"; c.Sandbox = "vm" }, "SANDBOX"},
+		{"bad timeout", func(c *Config) { c.AIRunner = "claude-code"; c.RunnerTimeout = "soon" }, "RUNNER_TIMEOUT"},
+		{"unknown runner", func(c *Config) { c.AIRunner = "gpt" }, "AI_RUNNER"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(cfg)
+			err := cfg.Validate()
+			if tc.wantErr == "" && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Errorf("error %v should mention %s", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestSplitList(t *testing.T) {
+	got := splitList(" go test, npm ,,make ")
+	if strings.Join(got, "|") != "go test|npm|make" {
+		t.Errorf("splitList = %q", got)
+	}
+	if splitList("  ") != nil {
+		t.Error("empty input should be nil")
+	}
+}
+
+func TestConfig_Validate_FlowStages(t *testing.T) {
+	cfg := validConfig()
+	cfg.ReviewEnabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "claude-code") {
+		t.Errorf("review with legacy runner should fail, got %v", err)
+	}
+	cfg.AIRunner = "claude-code"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("review with claude-code should pass: %v", err)
+	}
+	cfg.MergeMethod = "octopus"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "MERGE_METHOD") {
+		t.Errorf("bad merge method should fail, got %v", err)
+	}
+}

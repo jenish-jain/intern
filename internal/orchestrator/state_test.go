@@ -213,3 +213,59 @@ func TestState_SaveToReadOnlyDir(t *testing.T) {
 func formatTicketKey(workerID, ticketNum int) string {
 	return "TICKET-" + string(rune('A'+workerID)) + "-" + string(rune('0'+ticketNum%10))
 }
+
+func TestState_RecordFailurePersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s := NewState(path)
+
+	if got := s.Attempts("PROJ-1", "fp1"); got != 0 {
+		t.Fatalf("Attempts before any failure = %d, want 0", got)
+	}
+	if got := s.RecordFailure("PROJ-1", "fp1"); got != 1 {
+		t.Fatalf("first RecordFailure = %d, want 1", got)
+	}
+	if got := s.RecordFailure("PROJ-1", "fp1"); got != 2 {
+		t.Fatalf("second RecordFailure = %d, want 2", got)
+	}
+
+	reloaded := NewState(path)
+	if err := reloaded.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := reloaded.Attempts("PROJ-1", "fp1"); got != 2 {
+		t.Errorf("Attempts after reload = %d, want 2", got)
+	}
+	if got := reloaded.Attempts("PROJ-2", "fp1"); got != 0 {
+		t.Errorf("Attempts for untouched key = %d, want 0", got)
+	}
+}
+
+func TestState_EditedTicketResetsAttempts(t *testing.T) {
+	s := NewState(filepath.Join(t.TempDir(), "state.json"))
+	s.RecordFailure("PROJ-1", "old")
+	s.RecordFailure("PROJ-1", "old")
+
+	if got := s.Attempts("PROJ-1", "new"); got != 0 {
+		t.Errorf("Attempts with new fingerprint = %d, want 0", got)
+	}
+	if got := s.RecordFailure("PROJ-1", "new"); got != 1 {
+		t.Errorf("RecordFailure after edit = %d, want 1", got)
+	}
+}
+
+func TestState_LoadLegacyFileWithoutFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"processed":{"PROJ-1":true}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	s := NewState(path)
+	if err := s.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !s.IsProcessed("PROJ-1") {
+		t.Error("expected PROJ-1 processed")
+	}
+	if got := s.RecordFailure("PROJ-9", "fp"); got != 1 {
+		t.Errorf("RecordFailure on legacy-loaded state = %d, want 1", got)
+	}
+}

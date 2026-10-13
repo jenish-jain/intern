@@ -290,17 +290,31 @@ func TestCircuitBreaker_Reset(t *testing.T) {
 }
 
 func TestCircuitBreaker_OnStateChange(t *testing.T) {
-	transitions := []struct{ from, to State }{}
+	type transition struct{ from, to State }
+	// The callback runs on its own goroutine, so collect transitions over
+	// a channel instead of a shared slice.
+	transitions := make(chan transition, 8)
 
 	cfg := Config{
 		MaxFailures: 2,
 		Timeout:     50 * time.Millisecond,
 		OnStateChange: func(from, to State) {
-			transitions = append(transitions, struct{ from, to State }{from, to})
+			transitions <- transition{from, to}
 		},
 	}
 	cb := New(cfg)
 	testErr := errors.New("test error")
+
+	next := func() transition {
+		t.Helper()
+		select {
+		case tr := <-transitions:
+			return tr
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for state change callback")
+			return transition{}
+		}
+	}
 
 	// Open the circuit
 	for i := 0; i < 2; i++ {
@@ -309,25 +323,24 @@ func TestCircuitBreaker_OnStateChange(t *testing.T) {
 		})
 	}
 
-	// Wait for callback
-	time.Sleep(10 * time.Millisecond)
-
-	if len(transitions) != 1 {
-		t.Fatalf("Expected 1 transition, got %d", len(transitions))
-	}
-	if transitions[0].from != StateClosed || transitions[0].to != StateOpen {
-		t.Errorf("Expected CLOSED->OPEN, got %v->%v", transitions[0].from, transitions[0].to)
+	if tr := next(); tr.from != StateClosed || tr.to != StateOpen {
+		t.Errorf("Expected CLOSED->OPEN, got %v->%v", tr.from, tr.to)
 	}
 
-	// Wait for timeout and make successful request
+	// Wait for timeout and make a successful request: the breaker moves
+	// through half-open back to closed.
 	time.Sleep(100 * time.Millisecond)
 	_ = cb.Execute(context.Background(), func(ctx context.Context) error {
 		return nil
 	})
-	time.Sleep(10 * time.Millisecond)
 
-	if len(transitions) < 2 {
-		t.Fatalf("Expected at least 2 transitions, got %d", len(transitions))
+	// Callbacks run on their own goroutines, so the two transitions can
+	// arrive in either order.
+	got := map[transition]bool{next(): true, next(): true}
+	for _, want := range []transition{{StateOpen, StateHalfOpen}, {StateHalfOpen, StateClosed}} {
+		if !got[want] {
+			t.Errorf("missing transition %v->%v, got %v", want.from, want.to, got)
+		}
 	}
 }
 

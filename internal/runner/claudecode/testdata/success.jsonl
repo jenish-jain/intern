@@ -1,0 +1,9 @@
+{"type": "system", "subtype": "init", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159", "model": "claude-haiku-5-5", "permissionMode": "acceptEdits"}
+{"type": "assistant", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "rate_limit_event", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "user", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "assistant", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "user", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "assistant", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "user", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159"}
+{"type": "result", "subtype": "success", "is_error": false, "result": "{\"status\":\"done\",\"summary\":\"Appended the line 'world' to a.txt in the working directory. The file now contains 'hello' followed by 'world', and I verified this by printing the file contents.\"}", "session_id": "1eabf12c-31ed-4d49-9dac-b6e5a1c83159", "num_turns": 4, "total_cost_usd": 0.0041848400000000004, "terminal_reason": "completed", "structured_output": {"status": "done", "summary": "Appended the line 'world' to a.txt in the working directory. The file now contains 'hello' followed by 'world', and I verified this by printing the file contents."}, "usage": {"input_tokens": 8, "cache_creation_input_tokens": 18216, "cache_read_input_tokens": 35984, "output_tokens": 362}, "stop_reason": "tool_use"}

@@ -13,9 +13,12 @@ import (
 	"intern/internal/ai/agent"
 	"intern/internal/config"
 	"intern/internal/errors"
+	"intern/internal/gate"
 	"intern/internal/indexer"
 	"intern/internal/journal"
+	"intern/internal/project"
 	"intern/internal/repository"
+	"intern/internal/runner"
 	"intern/internal/ticketing"
 
 	logger "github.com/jenish-jain/logger"
@@ -24,19 +27,33 @@ import (
 type Coordinator struct {
 	Ticketing  *ticketing.Service
 	Repository *repository.RepositoryService
-	Agent      agent.Agent
+	Agent      agent.Agent   // model client used by the legacy runner
+	Runner     runner.Runner // engine that does the developer's work
 	Cfg        *config.Config
 	State      *State
 	Metrics    *Metrics
 	RepoPaths  *repository.RepositoryPath // Centralized path management
 	Journal    *journal.Journal           // Cross-ticket continuity log
 
+	// Notifier announces events a person should see (escalations,
+	// merges). Optional.
+	Notifier Notifier
+
+	// repoMu serializes use of the shared clone between the poll loop and
+	// request-driven work (Slack asks, architect conversations).
+	repoMu sync.Mutex
+	// remoteMu serializes pushes and PR creation from parallel tickets.
+	remoteMu sync.Mutex
+
+	team       teamMetrics
+	budgetOnce sync.Once
+
 	ticketMetricsMu sync.Mutex
 	ticketMetrics   map[string]*TicketMetrics // last-known metrics per ticket key, for request-driven callers (see LastTicketMetrics)
 }
 
 func NewCoordinator(ticketing *ticketing.Service, repository *repository.RepositoryService, agent agent.Agent, cfg *config.Config, state *State, repoPaths *repository.RepositoryPath) *Coordinator {
-	return &Coordinator{
+	c := &Coordinator{
 		Ticketing:     ticketing,
 		Repository:    repository,
 		Agent:         agent,
@@ -47,6 +64,8 @@ func NewCoordinator(ticketing *ticketing.Service, repository *repository.Reposit
 		Journal:       journal.Load(repoPaths.Root()),
 		ticketMetrics: make(map[string]*TicketMetrics),
 	}
+	c.Runner = newLegacyRunner(c)
+	return c
 }
 
 // LastTicketMetrics returns the most recently recorded metrics for a ticket
@@ -79,6 +98,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 	// Start metrics server if enabled
 	if c.Cfg.MetricsEnabled {
 		metricsServer := NewMetricsServer(c.Metrics, c.Cfg.MetricsPort)
+		metricsServer.Team = c.Team
+		metricsServer.Spend = c.State.Spend
 		go func() {
 			if err := metricsServer.Start(ctx); err != nil {
 				logger.Error("Metrics server failed", "error", err)
@@ -119,102 +140,78 @@ func (c *Coordinator) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			// Ensure local repo is up to date before each cycle
-			if err := c.prepareRepository(ctx); err != nil {
-				logger.Error("Repository preparation failed", "error", err)
-				backoffSleep(interval)
-				continue
-			}
-
-			// Reconcile journal entries: flip Merged for PRs that landed since
-			// the last cycle, so deferred tickets can unblock.
-			if updated, err := c.Journal.Reconcile(ctx, c.Repository.IsPRMerged); err != nil {
-				logger.Warn("Journal reconciliation failed", "error", err)
-			} else if updated > 0 {
-				logger.Info("Journal reconciliation: marked PRs as merged", "count", updated)
-			}
-
-			tickets, err := func() ([]ticketing.Ticket, error) {
-				var out []ticketing.Ticket
-				err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-					t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
-					if e != nil {
-						return MakeTransient(e)
-					}
-					out = t
-					return nil
-				})
-				c.Metrics.AddRetries(attempts)
-				return out, err
-			}()
-			if err != nil {
-				logger.Error("Failed to fetch tickets", "error", err)
-				backoffSleep(interval)
-				continue
-			}
-			if len(tickets) == 0 {
-				logger.Info("No tickets to process; sleeping", "interval", interval.String())
-				time.Sleep(interval)
-				continue
-			}
-
-			maxWorkers := c.Cfg.MaxConcurrentTickets
-			if maxWorkers <= 0 {
-				maxWorkers = 1
-			}
-			sem := make(chan struct{}, maxWorkers)
-			var wg sync.WaitGroup
-			for _, t := range tickets {
-				if c.State.IsProcessed(t.Key) {
-					continue
-				}
-				if blocker := c.journalBlocker(t.Summary + " " + t.Description); blocker != "" {
-					logger.Info("Deferring ticket - related work not yet merged", "ticket", t.Key, "waiting_on", blocker)
-					continue
-				}
-				sem <- struct{}{}
-				wg.Add(1)
-				go func(key, summary, description string) {
-					// Ensure cleanup happens even on panic
-					defer wg.Done()
-					defer func() { <-sem }()
-
-					// Panic recovery - catch and log panics without crashing agent
-					defer func() {
-						if r := recover(); r != nil {
-							logger.Error("Worker panic recovered", "ticket", key, "panic", r)
-							c.Metrics.IncTicketsFailed()
-							// Panic recovered - ticket will not be marked as processed
-							// It will be retried in next polling cycle
-						}
-					}()
-
-					// Process the ticket
-					if err := c.processTicket(ctx, key, summary, description); err != nil {
-						logger.Error("Failed processing ticket", "key", key, "error", err)
-						c.Metrics.IncTicketsFailed()
-						return
-					}
-
-					// Only mark as processed if successful
-					c.State.MarkProcessed(key)
-				}(t.Key, t.Summary, t.Description)
-			}
-			wg.Wait()
-			// log metrics summary
-			s := c.Metrics.Snapshot()
-			logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
-			time.Sleep(interval)
+			c.runCycle(ctx, interval)
 		}
 	}
 }
 
-func backoffSleep(base time.Duration) {
-	t := base
-	if t < time.Second*5 {
-		t = time.Second * 5
+// runCycle is one poll iteration. It holds the repository lock so
+// request-driven work never shares the clone with it, and sleeps after
+// releasing it.
+func (c *Coordinator) runCycle(ctx context.Context, interval time.Duration) {
+	sleep := c.cycle(ctx, interval)
+	select {
+	case <-ctx.Done():
+	case <-time.After(sleep):
 	}
-	time.Sleep(t)
+}
+
+// cycle does the work of one poll iteration and returns how long to wait
+// before the next.
+func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Duration {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
+
+	// Ensure local repo is up to date before each cycle
+	if err := c.prepareRepository(ctx); err != nil {
+		logger.Error("Repository preparation failed", "error", err)
+		return backoffDuration(interval)
+	}
+
+	// Flip Merged for PRs that landed since the last cycle, so deferred
+	// tickets can unblock, and move those tickets to Done.
+	c.reconcileMerged(ctx)
+
+	// Finish in-flight PRs (review, fixes, test, merge) before starting
+	// new tickets.
+	c.advanceFlows(ctx)
+
+	if c.budgetExceeded() {
+		logger.Warn("Project budget reached; not starting new tickets", "spent", c.State.Spend(), "budget", c.Cfg.ProjectBudgetUSD)
+		return interval
+	}
+
+	var tickets []ticketing.Ticket
+	err, attempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
+		t, e := c.Ticketing.GetTickets(ctx, c.Cfg.AgentUsername, c.Cfg.JiraProject)
+		if e != nil {
+			return MakeTransient(e)
+		}
+		tickets = t
+		return nil
+	})
+	c.Metrics.AddRetries(attempts)
+	if err != nil {
+		logger.Error("Failed to fetch tickets", "error", err)
+		return backoffDuration(interval)
+	}
+	if len(tickets) == 0 {
+		logger.Info("No tickets to process; sleeping", "interval", interval.String())
+		return interval
+	}
+
+	c.dispatchTickets(ctx, tickets, c.processTicket)
+	s := c.Metrics.Snapshot()
+	logger.Info("Run summary", "tickets", s.TicketsProcessed, "prs", s.PRsCreated, "retries", s.Retries, "ai_failures", s.AIPlanFailures)
+	return interval
+}
+
+// backoffDuration is the wait after a failed cycle: at least 5s.
+func backoffDuration(base time.Duration) time.Duration {
+	if base < 5*time.Second {
+		return 5 * time.Second
+	}
+	return base
 }
 
 // checkContext checks if the context has been cancelled and returns an appropriate error.
@@ -236,6 +233,8 @@ func checkContext(ctx context.Context, ticketKey, checkpoint string) error {
 // single ticket outside of Run()'s polling loop and need to ensure the repo
 // is ready before ProcessTicket runs.
 func (c *Coordinator) PrepareRepository(ctx context.Context) error {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
 	return c.prepareRepository(ctx)
 }
 
@@ -244,6 +243,8 @@ func (c *Coordinator) PrepareRepository(ctx context.Context) error {
 // driven trigger sources (Slack webhook, Cloud Run handler) can invoke it
 // directly for one ticket without going through Run()'s JIRA polling loop.
 func (c *Coordinator) ProcessTicket(ctx context.Context, key, summary, description string) error {
+	c.repoMu.Lock()
+	defer c.repoMu.Unlock()
 	if err := c.processTicket(ctx, key, summary, description); err != nil {
 		return err
 	}
@@ -258,6 +259,9 @@ func (c *Coordinator) prepareRepository(ctx context.Context) error {
 		if err := c.Repository.CloneRepository(ctx, repoPath); err != nil {
 			return err
 		}
+	}
+	if err := discardLocalChanges(ctx, repoPath); err != nil {
+		logger.Warn("Could not clean agent clone", "error", err)
 	}
 	base := c.Cfg.BaseBranch
 	if base == "" {
@@ -287,328 +291,69 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	ticketMetrics := &TicketMetrics{TicketKey: key, Status: "failed", Timestamp: startTime}
 	c.storeTicketMetrics(key, ticketMetrics)
 
+	c.setStatus(ctx, key, ticketing.StatusInProgress)
+
 	branchName := buildBranchName(c.Cfg.BranchPrefix, key)
-	logger.Info("Creating branch", "branch", branchName)
-	if err := c.Repository.CreateBranch(ctx, branchName); err != nil {
+	logger.Info("Creating branch in a dedicated worktree", "branch", branchName)
+	repoRoot, cleanup, err := c.addWorktree(ctx, branchName)
+	if err != nil {
 		return errors.NewRepoBranchError(err, branchName, "create").
 			WithContext("ticket_key", key)
 	}
-	if err := c.Repository.SwitchBranch(ctx, branchName); err != nil {
-		return errors.NewRepoBranchError(err, branchName, "switch to").
-			WithContext("ticket_key", key)
-	}
-
-	// Checkpoint 1: Check for cancellation before expensive operations
+	defer cleanup()
 	if err := checkContext(ctx, key, "after branch setup"); err != nil {
 		return err
 	}
 
-	repoRoot := c.RepoPaths.Root()
-
-	// Build or update index for smart context selection
-	idx := indexer.New(repoRoot)
-	fileIndex, wasUpdated, indexErr := idx.RebuildIfStale()
-	if indexErr != nil {
-		logger.Warn("Failed to build/update index, smart context may fall back to simple", "error", indexErr)
-	} else {
-		if wasUpdated {
-			logger.Info("Index built/updated successfully", "files", len(fileIndex.Files))
-			// Save the updated index
-			if saveErr := idx.SaveIndex(fileIndex); saveErr != nil {
-				logger.Warn("Failed to save index", "error", saveErr)
-			}
-		} else {
-			logger.Debug("Index already up to date")
-		}
-	}
-
-	// Prior-work continuity: surface recent related tickets (and whether their
-	// PRs have merged) so the model builds on existing work instead of
-	// duplicating or contradicting it.
-	priorWork := journal.Render(c.Journal.Relevant(summary+" "+description, 3))
-
-	// Use smart context builder with ticket description for better file selection
-	usedSmartContext := false
-	ctxStr, ctxErr := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles, nil)
-	if ctxErr != nil {
-		// Fall back to simple context builder on error
-		logger.Warn("Smart context builder failed, falling back to simple builder", "error", ctxErr)
-		ctxStr = ai.BuildRepoContext(repoRoot, c.Cfg.ContextMaxFiles, c.Cfg.ContextMaxBytes)
-		c.Metrics.IncSimpleContextUsed()
-	} else {
-		usedSmartContext = true
-		logger.Info("Smart context selection succeeded", "context_size", len(ctxStr))
-		c.Metrics.IncSmartContextUsed()
-	}
-	ctxStr = priorWork + ctxStr
-
-	planBackoff := BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}
-
-	var changes []agent.CodeChange
-	var needFiles []string
-	var usageMetrics *agent.UsageMetrics
-	planErr, attempts := Retry(ctx, planBackoff, func() error {
-		ch, nf, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
-		if e != nil {
-			return MakeTransient(e)
-		}
-		changes = ch
-		needFiles = nf
-		usageMetrics = metrics
-		return nil
-	})
-	c.Metrics.AddRetries(attempts)
-	if planErr != nil {
-		c.Metrics.IncAIPlanFailures()
-		return fmt.Errorf("AI planning failed: %w", planErr)
-	}
-
-	// Retrieval pass: the model asked to see the full content of files shown
-	// signatures-only (responded with {"need_files":[...]} instead of
-	// changes). Rebuild context with those files promoted to the
-	// full-content tier and plan again - this is cheap since a need_files
-	// response is just a short list. Bounded and iterative: each round's
-	// need_files accumulate on top of prior rounds', so a model that still
-	// needs another file after seeing the first batch can ask again instead
-	// of being forced to guess at content it was never shown.
-	const maxRetrievalRounds = 3
-	fullContentFiles := needFiles
-	for round := 0; len(fullContentFiles) > 0 && usedSmartContext && round < maxRetrievalRounds; round++ {
-		logger.Info("AI requested full content for additional files", "ticket", key, "files", fullContentFiles, "round", round+1)
-
-		ctxStr2, ctxErr2 := ai.BuildSmartRepoContext(repoRoot, description, c.Cfg.ContextMaxFiles, fullContentFiles)
-		if ctxErr2 != nil {
-			logger.Warn("Failed to rebuild context for requested files, proceeding without further retrieval",
-				"ticket", key, "error", ctxErr2)
-			break
-		}
-		ctxStr = priorWork + ctxStr2
-
-		var changes2 []agent.CodeChange
-		var needFiles2 []string
-		var usageMetrics2 *agent.UsageMetrics
-		planErr2, attempts2 := Retry(ctx, planBackoff, func() error {
-			ch, nf, metrics, e := c.Agent.PlanChanges(ctx, key, summary, description, ctxStr)
-			if e != nil {
-				return MakeTransient(e)
-			}
-			changes2 = ch
-			needFiles2 = nf
-			usageMetrics2 = metrics
-			return nil
-		})
-		c.Metrics.AddRetries(attempts2)
-		if planErr2 != nil {
-			c.Metrics.IncAIPlanFailures()
-			return fmt.Errorf("AI planning failed (retrieval pass): %w", planErr2)
-		}
-		changes = changes2
-		usageMetrics = sumUsageMetrics(usageMetrics, usageMetrics2)
-
-		fullContentFiles = mergeUnique(fullContentFiles, needFiles2)
-	}
-
-	// Checkpoint 2: Check for cancellation after AI planning (expensive operation)
-	if err := checkContext(ctx, key, "after AI planning"); err != nil {
-		return err
-	}
-
-	// Update context strategy in usage metrics
-	if usageMetrics != nil {
-		if usedSmartContext {
-			usageMetrics.ContextStats.Strategy = "smart"
-		} else {
-			usageMetrics.ContextStats.Strategy = "simple"
-		}
-	}
-
-	// Create per-ticket metrics for tracking
-	ticketMetrics.ApplyUsage(usageMetrics)
-	ticketMetrics.SetRetryCount(attempts)
-
-	// Estimate savings if smart context was used
-	if usageMetrics != nil && usedSmartContext {
-		// Estimate what full context would have cost
-		// Rough approximation: assume full context would be 3x larger
-		// (based on typical repository file counts vs selected files)
-		estimatedFullContextTokens := usageMetrics.InputTokens * 3
-		estimatedFullContextCost := ai.CalculateCost(estimatedFullContextTokens, usageMetrics.OutputTokens, &ai.ClaudeSonnet4)
-
-		// Save savings estimate
-		ticketMetrics.SetSavingsEstimate(estimatedFullContextCost)
-
-		logger.Debug("Smart context savings",
-			"ticket", key,
-			"estimated_full_cost", ai.FormatCost(estimatedFullContextCost),
-			"actual_cost", ai.FormatCost(usageMetrics.EstimatedCost),
-			"savings", ai.FormatCost(ticketMetrics.CostSavings))
-	}
-
-	// Update global metrics with token usage
-	if usageMetrics != nil {
-		c.Metrics.AddTokenUsage(
-			usageMetrics.InputTokens,
-			usageMetrics.OutputTokens,
-			usageMetrics.EstimatedCost,
-		)
-
-		// Log per-ticket cost and metrics
-		logger.Info("AI generated code",
-			"ticket", key,
-			"cost", ai.FormatCost(usageMetrics.EstimatedCost),
-			"input_tokens", ai.FormatTokens(usageMetrics.InputTokens),
-			"output_tokens", ai.FormatTokens(usageMetrics.OutputTokens),
-			"context", usageMetrics.ContextStats.Strategy)
-	}
-	valid, verr := validatePlannedChanges(repoRoot, changes, c.Cfg.AllowedWriteDirs, c.Cfg.PlanMaxFiles)
-	if verr != nil {
-		return fmt.Errorf("validation failed: %w", verr)
-	}
-
-	// Snapshot exported APIs of edited Go files before applying changes, so
-	// the journal entry can record which public APIs are new (see
-	// diffExportedAPIs below).
-	beforeAPIs := capturePublicAPIs(repoRoot, valid)
-
-	for _, ch := range valid {
-		abs := filepath.Join(repoRoot, ch.Path)
-		switch ch.Operation {
-		case agent.OperationDelete:
-			// Delete the file
-			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("delete %s: %w", ch.Path, err)
-			}
-			// Stage the deletion in git
-			if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
-				return fmt.Errorf("git add (delete) %s: %w", ch.Path, err)
-			}
-			logger.Debug("Deleted file", "path", ch.Path)
-		case agent.OperationEdit:
-			if err := applyEditChange(repoRoot, ch); err != nil {
-				return fmt.Errorf("edit %s: %w", ch.Path, err)
-			}
-			if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
-				return fmt.Errorf("git add %s: %w", ch.Path, err)
-			}
-			logger.Debug("Edited file", "path", ch.Path)
-		case agent.OperationCreate:
-			if _, err := os.Stat(abs); err == nil {
-				return fmt.Errorf("create %s: file already exists (use operation=edit)", ch.Path)
-			} else if !os.IsNotExist(err) {
-				return fmt.Errorf("stat %s: %w", ch.Path, err)
-			}
-			if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
-				return fmt.Errorf("mkdir: %w", err)
-			}
-			if err := os.WriteFile(abs, []byte(ch.Content), 0644); err != nil {
-				return fmt.Errorf("write %s: %w", ch.Path, err)
-			}
-			if err := c.Repository.AddFile(ctx, ch.Path); err != nil {
-				return fmt.Errorf("git add %s: %w", ch.Path, err)
-			}
-			logger.Debug("Created file", "path", ch.Path)
-		default:
-			return fmt.Errorf("%s: unknown operation %q", ch.Path, ch.Operation)
-		}
-	}
-
-	// Checkpoint 3: Check for cancellation after file operations (before commit)
-	if err := checkContext(ctx, key, "after file operations"); err != nil {
-		return err
-	}
-
-	if len(valid) > 0 {
-		if err := c.Repository.Commit(ctx, fmt.Sprintf("feat(%s): apply planned changes", key)); err != nil {
-			return fmt.Errorf("commit: %w", err)
-		}
-	}
-	changed, err := c.Repository.HasLocalChanges(ctx)
+	base, err := gate.HeadSHA(ctx, repoRoot)
 	if err != nil {
-		logger.Error("status failed", "error", err)
-	}
-	if !changed && len(valid) == 0 {
-		logger.Info("No effective changes; skipping push/PR", "key", key)
-		return nil
+		return fmt.Errorf("read base commit: %w", err)
 	}
 
-	// Run self-healing pipeline (includes quality gates)
-	healResult, err := c.selfHealingPipeline(ctx, key, summary, valid, repoRoot)
-	if err != nil {
-		logger.Error("Self-healing pipeline failed", "key", key, "error", err)
-		return fmt.Errorf("self-healing failed: %w", err)
+	job := runner.Job{
+		Role:        runner.RoleDeveloper,
+		TicketKey:   key,
+		Summary:     summary,
+		Description: description,
+		Workdir:     repoRoot,
+		Budget:      runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+	}
+	outcome, workErr := c.developAndVerify(ctx, job, base)
+
+	usage := outcome.Result.Usage
+	ticketMetrics.InputTokens = usage.InputTokens
+	ticketMetrics.OutputTokens = usage.OutputTokens
+	ticketMetrics.Cost = usage.CostUSD
+	c.Metrics.AddTokenUsage(usage.InputTokens, usage.OutputTokens, usage.CostUSD)
+	c.recordSpend(ctx, runner.RoleDeveloper, usage.CostUSD)
+	logger.Info("Runner finished",
+		"ticket", key,
+		"cost", ai.FormatCost(usage.CostUSD),
+		"input_tokens", ai.FormatTokens(usage.InputTokens),
+		"output_tokens", ai.FormatTokens(usage.OutputTokens))
+	if workErr != nil {
+		return workErr
 	}
 
-	// Track healing metrics
-	if len(healResult.Attempts) > 0 {
-		c.Metrics.AddHealAttempts(len(healResult.Attempts))
-		if healResult.Success {
-			c.Metrics.IncHealSuccesses()
-		} else {
-			c.Metrics.IncHealFailures()
-		}
-	}
-
-	// If healing failed, skip push/PR
-	if !healResult.Success {
-		logger.Error("Quality gates failed after healing attempts; skipping push/PR",
-			"key", key,
-			"attempts", healResult.TotalAttempts,
-			"cost", healResult.TotalCost)
-		return nil
-	}
-
-	// If healing was needed and succeeded, commit the fixes
-	if len(healResult.Attempts) > 0 {
-		if err := c.Repository.Commit(ctx, fmt.Sprintf("fix(%s): self-healing fixes after %d attempts", key, healResult.TotalAttempts)); err != nil {
-			logger.Warn("Failed to commit healing fixes", "error", err)
-			// Continue anyway - fixes are already applied
-		}
-		logger.Info("Self-healing succeeded, fixes committed",
-			"key", key,
-			"attempts", healResult.TotalAttempts,
-			"cost", healResult.TotalCost)
-	}
-
-	// Checkpoint 4: Check for cancellation before push/PR (point of no return)
+	// Checkpoint: point of no return before push/PR
 	if err := checkContext(ctx, key, "before push/PR"); err != nil {
 		return err
 	}
 
-	// Run final quality gates check for PR notes (should pass now)
-	notes, ok := runQualityGates(ctx, c.Cfg, repoRoot)
-	if !ok {
-		// This shouldn't happen after successful healing, but check anyway
-		logger.Error("Quality gates failed after successful healing; skipping push/PR", "key", key)
-		return nil
-	}
-	// Check for dry-run mode
 	if c.Cfg.DryRun {
 		logger.Warn("DRY RUN MODE: Skipping push and PR creation",
 			"ticket", key,
 			"branch", branchName,
-			"files_changed", len(valid),
-			"cost", usageMetrics.EstimatedCost)
-
-		// In dry-run, log what would have been done
-		logger.Info("DRY RUN: Would have created PR",
-			"ticket", key,
-			"branch", branchName,
-			"base_branch", c.Cfg.BaseBranch,
-			"files", len(valid),
-			"summary", summary)
-
-		// Mark Done even in dry-run (to avoid reprocessing)
-		if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
-			logger.Error("Failed to move ticket to Done", "error", err)
-		}
-
-		// Update state to avoid reprocessing
-		// MarkProcessed automatically saves the state, so no need to call Save() explicitly
+			"files_changed", len(outcome.Changes),
+			"cost", usage.CostUSD)
 		c.State.MarkProcessed(key)
-
-		return nil // Exit early without creating PR
+		return nil
 	}
 
+	// Pushes and PR creation share the main clone's git storage and the
+	// GitHub client; serialize them across parallel tickets.
+	c.remoteMu.Lock()
+	defer c.remoteMu.Unlock()
 	pushErr, pushAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
 		return MakeTransient(c.Repository.Push(ctx, branchName))
 	})
@@ -616,24 +361,24 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 	if pushErr != nil {
 		return fmt.Errorf("push: %w", pushErr)
 	}
-	base := c.Cfg.BaseBranch
-	if base == "" {
-		base = "main"
-	}
-	// Surface any judgment calls the AI made while planning (e.g. renaming a
-	// resource to avoid a naming collision) so a human can confirm or
-	// override them, rather than the ticket silently failing on ambiguity.
-	for _, ch := range valid {
-		if ch.Note != "" {
-			notes = append(notes, fmt.Sprintf("%s: %s", ch.Path, ch.Note))
-		}
+	baseBranch := c.Cfg.BaseBranch
+	if baseBranch == "" {
+		baseBranch = "main"
 	}
 
 	title := buildPRTitle(key, summary)
-	body := buildPRBody(key, summary, description, valid, notes)
+	body := buildPRBody(prBodyInput{
+		TicketKey:   key,
+		Summary:     summary,
+		Description: description,
+		WorkSummary: outcome.Result.Summary,
+		Changes:     outcome.Changes,
+		Notes:       outcome.Notes,
+		Checks:      project.Summary(outcome.Checks),
+	})
 	var prURL string
 	prErr, prAttempts := Retry(ctx, BackoffConfig{Initial: time.Second, Max: 10 * time.Second, Multiplier: 2, Jitter: 0.2, MaxRetries: 3}, func() error {
-		u, e := c.Repository.CreatePullRequest(ctx, base, branchName, title, body)
+		u, e := c.Repository.CreatePullRequest(ctx, baseBranch, branchName, title, body)
 		if e != nil {
 			return MakeTransient(e)
 		}
@@ -649,84 +394,68 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 
 	// Record this ticket's work in the journal for future tickets'
 	// continuity injection and dependency deferral.
-	if err := c.Journal.Append(journal.Entry{
-		TicketKey:    key,
-		Summary:      summary,
-		Branch:       branchName,
-		PRURL:        prURL,
-		Merged:       false,
-		FilesChanged: changedPaths(valid),
-		PublicAPIs:   diffPublicAPIs(repoRoot, valid, beforeAPIs),
-		Timestamp:    time.Now(),
-	}); err != nil {
-		logger.Warn("Failed to append journal entry", "ticket", key, "error", err)
+	paths := make([]string, len(outcome.Changes))
+	for i, ch := range outcome.Changes {
+		paths[i] = ch.Path
+	}
+	if c.Journal != nil {
+		if err := c.Journal.Append(journal.Entry{
+			TicketKey:    key,
+			Summary:      summary,
+			Branch:       branchName,
+			PRURL:        prURL,
+			FilesChanged: paths,
+			PublicAPIs:   addedPublicAPIs(ctx, repoRoot, base, outcome.Changes),
+			Notes:        truncateNotes(outcome.Result.Summary, 500),
+			Timestamp:    time.Now(),
+		}); err != nil {
+			logger.Warn("Failed to append journal entry", "ticket", key, "error", err)
+		}
 	}
 
-	// Mark Done
-	if err := c.Ticketing.UpdateTicketStatus(ctx, key, "Done", c.Cfg.JiraTransitions); err != nil {
-		logger.Error("Failed to move ticket to Done", "error", err)
-	}
+	// The ticket moves to Done only once this PR merges (see
+	// reconcileMerged), so dependent tickets never start on an unmerged base.
+	c.setStatus(ctx, key, ticketing.StatusInReview)
+	c.startFlow(ctx, key, summary, description, branchName, prURL, usage.CostUSD)
 
-	// Update metrics with execution time and files changed
 	executionTime := time.Since(startTime)
-	filesChanged := len(valid)
-
 	ticketMetrics.SetExecutionTime(executionTime)
-	ticketMetrics.SetFilesChanged(filesChanged)
+	ticketMetrics.SetFilesChanged(len(outcome.Changes))
 	ticketMetrics.Status = "success"
 
 	c.Metrics.IncTicketsProcessed()
 	c.Metrics.AddExecutionTime(executionTime)
-	c.Metrics.AddFilesChanged(filesChanged)
+	c.Metrics.AddFilesChanged(len(outcome.Changes))
 
-	// Log final ticket summary
 	logger.Info("Ticket completed",
 		"ticket", key,
 		"duration", executionTime.Round(time.Second),
-		"files_changed", filesChanged,
+		"files_changed", len(outcome.Changes),
 		"pr_url", prURL)
-
 	return nil
 }
 
-// changedPaths returns the repo-relative paths touched by changes, in order.
-func changedPaths(changes []agent.CodeChange) []string {
-	paths := make([]string, len(changes))
-	for i, ch := range changes {
-		paths[i] = ch.Path
-	}
-	return paths
-}
-
-// capturePublicAPIs snapshots the exported symbols of Go files about to be
-// edited, before any changes are applied. Created files have no "before"
-// state (absent from the map, treated as empty by diffPublicAPIs); deleted
-// files aren't tracked.
-func capturePublicAPIs(repoRoot string, changes []agent.CodeChange) map[string][]string {
-	before := make(map[string][]string)
-	for _, ch := range changes {
-		if ch.Operation != agent.OperationEdit || !strings.HasSuffix(ch.Path, ".go") {
-			continue
-		}
-		before[ch.Path] = readExportedAPIs(filepath.Join(repoRoot, ch.Path))
-	}
-	return before
-}
-
-// diffPublicAPIs compares each changed Go file's exported symbols against its
-// pre-change snapshot (from capturePublicAPIs) and returns the newly added
-// ones as "path.Symbol", for recording in the journal.
-func diffPublicAPIs(repoRoot string, changes []agent.CodeChange, before map[string][]string) []string {
+// addedPublicAPIs returns exported Go symbols that the change added, as
+// "path.Symbol", by comparing each changed Go file with its content at base.
+func addedPublicAPIs(ctx context.Context, repoRoot, base string, changes []gate.Change) []string {
 	var added []string
 	for _, ch := range changes {
-		if ch.Operation == agent.OperationDelete || !strings.HasSuffix(ch.Path, ".go") {
+		if ch.Status == "D" || !strings.HasSuffix(ch.Path, ".go") {
 			continue
 		}
-		prior := make(map[string]bool, len(before[ch.Path]))
-		for _, sym := range before[ch.Path] {
-			prior[sym] = true
+		prior := map[string]bool{}
+		if ch.Status != "A" {
+			if old, err := runCommandCapture(ctx, repoRoot, "git", "show", base+":"+ch.Path); err == nil {
+				for _, sym := range exportedSymbols([]byte(old)) {
+					prior[sym] = true
+				}
+			}
 		}
-		for _, sym := range readExportedAPIs(filepath.Join(repoRoot, ch.Path)) {
+		data, err := os.ReadFile(filepath.Join(repoRoot, ch.Path))
+		if err != nil {
+			continue
+		}
+		for _, sym := range exportedSymbols(data) {
 			if !prior[sym] {
 				added = append(added, ch.Path+"."+sym)
 			}
@@ -735,18 +464,20 @@ func diffPublicAPIs(repoRoot string, changes []agent.CodeChange, before map[stri
 	return added
 }
 
-// readExportedAPIs returns the exported top-level symbols declared in the Go
-// file at path, or nil if it can't be read or parsed.
-func readExportedAPIs(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	symbols, err := indexer.ExtractExportedSymbols(data)
+func exportedSymbols(src []byte) []string {
+	symbols, err := indexer.ExtractExportedSymbols(src)
 	if err != nil {
 		return nil
 	}
 	return symbols
+}
+
+func truncateNotes(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // journalBlocker returns the ticket key of a related prior entry whose PR

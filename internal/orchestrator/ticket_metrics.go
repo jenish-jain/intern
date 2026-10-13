@@ -10,26 +10,22 @@ import (
 // Used for per-ticket logging and JSON export.
 type TicketMetrics struct {
 	TicketKey     string        `json:"ticket_key"`
-	Status        string        `json:"status"`          // "success" or "failed"
+	Status        string        `json:"status"` // "success" or "failed"
 	InputTokens   int           `json:"input_tokens"`
 	OutputTokens  int           `json:"output_tokens"`
-	Cost          float64       `json:"cost"`            // In dollars
+	Cost          float64       `json:"cost"`                   // In dollars
 	ExecutionTime time.Duration `json:"execution_time_seconds"` // Will be converted to seconds in JSON
 	FilesChanged  int           `json:"files_changed"`
 
 	// Context information
-	ContextStrategy   string `json:"context_strategy"`    // "smart" or "simple"
+	ContextStrategy   string `json:"context_strategy"` // "smart" or "simple"
 	FilesInContext    int    `json:"files_in_context"`
 	ContextSizeBytes  int    `json:"context_size_bytes"`
-	KeywordsExtracted int    `json:"keywords_extracted"`   // Only for smart context
+	KeywordsExtracted int    `json:"keywords_extracted"` // Only for smart context
 
 	// Error information (if failed)
 	ErrorMessage string `json:"error_message,omitempty"`
 	RetryCount   int    `json:"retry_count"`
-
-	// Savings estimation (smart context vs full context)
-	EstimatedFullContextCost float64 `json:"estimated_full_context_cost,omitempty"`
-	CostSavings             float64 `json:"cost_savings,omitempty"`
 
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -37,13 +33,13 @@ type TicketMetrics struct {
 // TicketResult is the JSON-friendly version of TicketMetrics.
 // Converts durations to seconds for easier JSON handling.
 type TicketResult struct {
-	TicketKey     string  `json:"ticket_key"`
-	Status        string  `json:"status"`
-	InputTokens   int     `json:"input_tokens"`
-	OutputTokens  int     `json:"output_tokens"`
-	Cost          float64 `json:"cost"`
+	TicketKey            string  `json:"ticket_key"`
+	Status               string  `json:"status"`
+	InputTokens          int     `json:"input_tokens"`
+	OutputTokens         int     `json:"output_tokens"`
+	Cost                 float64 `json:"cost"`
 	ExecutionTimeSeconds float64 `json:"execution_time_seconds"`
-	FilesChanged  int     `json:"files_changed"`
+	FilesChanged         int     `json:"files_changed"`
 
 	ContextStrategy   string `json:"context_strategy"`
 	FilesInContext    int    `json:"files_in_context"`
@@ -53,31 +49,26 @@ type TicketResult struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	RetryCount   int    `json:"retry_count"`
 
-	EstimatedFullContextCost float64 `json:"estimated_full_context_cost,omitempty"`
-	CostSavings             float64 `json:"cost_savings,omitempty"`
-
 	Timestamp string `json:"timestamp"` // RFC3339 format
 }
 
 // ToResult converts TicketMetrics to JSON-friendly TicketResult.
 func (tm *TicketMetrics) ToResult() TicketResult {
 	return TicketResult{
-		TicketKey:                tm.TicketKey,
-		Status:                   tm.Status,
-		InputTokens:              tm.InputTokens,
-		OutputTokens:             tm.OutputTokens,
-		Cost:                     tm.Cost,
-		ExecutionTimeSeconds:     tm.ExecutionTime.Seconds(),
-		FilesChanged:             tm.FilesChanged,
-		ContextStrategy:          tm.ContextStrategy,
-		FilesInContext:           tm.FilesInContext,
-		ContextSizeBytes:         tm.ContextSizeBytes,
-		KeywordsExtracted:        tm.KeywordsExtracted,
-		ErrorMessage:             tm.ErrorMessage,
-		RetryCount:               tm.RetryCount,
-		EstimatedFullContextCost: tm.EstimatedFullContextCost,
-		CostSavings:              tm.CostSavings,
-		Timestamp:                tm.Timestamp.Format(time.RFC3339),
+		TicketKey:            tm.TicketKey,
+		Status:               tm.Status,
+		InputTokens:          tm.InputTokens,
+		OutputTokens:         tm.OutputTokens,
+		Cost:                 tm.Cost,
+		ExecutionTimeSeconds: tm.ExecutionTime.Seconds(),
+		FilesChanged:         tm.FilesChanged,
+		ContextStrategy:      tm.ContextStrategy,
+		FilesInContext:       tm.FilesInContext,
+		ContextSizeBytes:     tm.ContextSizeBytes,
+		KeywordsExtracted:    tm.KeywordsExtracted,
+		ErrorMessage:         tm.ErrorMessage,
+		RetryCount:           tm.RetryCount,
+		Timestamp:            tm.Timestamp.Format(time.RFC3339),
 	}
 }
 
@@ -144,12 +135,4 @@ func (tm *TicketMetrics) SetFilesChanged(count int) {
 // SetRetryCount sets the retry count.
 func (tm *TicketMetrics) SetRetryCount(count int) {
 	tm.RetryCount = count
-}
-
-// SetSavingsEstimate sets the estimated savings from using smart context.
-func (tm *TicketMetrics) SetSavingsEstimate(fullContextCost float64) {
-	tm.EstimatedFullContextCost = fullContextCost
-	if fullContextCost > tm.Cost {
-		tm.CostSavings = fullContextCost - tm.Cost
-	}
 }

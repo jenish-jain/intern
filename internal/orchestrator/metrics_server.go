@@ -14,6 +14,10 @@ type MetricsServer struct {
 	metrics *Metrics
 	server  *http.Server
 	port    int
+
+	// Team and Spend, when set, add multi-role metrics.
+	Team  func() TeamSnapshot
+	Spend func() float64
 }
 
 // NewMetricsServer creates a new metrics HTTP server
@@ -22,24 +26,25 @@ func NewMetricsServer(metrics *Metrics, port int) *MetricsServer {
 		port = 9090 // Default Prometheus port
 	}
 
-	return &MetricsServer{
+	ms := &MetricsServer{
 		metrics: metrics,
 		port:    port,
 	}
-}
-
-// Start starts the HTTP metrics server
-func (ms *MetricsServer) Start(ctx context.Context) error {
+	// Built here rather than in Start so Stop, which may run on another
+	// goroutine, never races with Start assigning the field.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", ms.handleMetrics)
 	mux.HandleFunc("/health", ms.handleHealth)
 	mux.HandleFunc("/", ms.handleDashboard)
-
 	ms.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", ms.port),
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
+	return ms
+}
 
+// Start starts the HTTP metrics server
+func (ms *MetricsServer) Start(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -146,6 +151,27 @@ func (ms *MetricsServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP ai_intern_runtime_seconds Total runtime since start in seconds\n")
 	fmt.Fprintf(w, "# TYPE ai_intern_runtime_seconds gauge\n")
 	fmt.Fprintf(w, "ai_intern_runtime_seconds %.2f\n", snapshot.TotalRuntime.Seconds())
+
+	if ms.Team != nil {
+		t := ms.Team()
+		fmt.Fprint(w, "\n"+formatRoleCosts(t.RoleCost))
+		for _, m := range []struct {
+			name, help string
+			v          int64
+		}{
+			{"ai_intern_review_approvals_total", "Reviews that approved", t.Approvals},
+			{"ai_intern_review_rejections_total", "Reviews that requested changes", t.Rejections},
+			{"ai_intern_test_passes_total", "Acceptance test runs that passed", t.TestPasses},
+			{"ai_intern_test_failures_total", "Acceptance test runs that failed", t.TestFails},
+			{"ai_intern_merges_total", "PRs merged by intern", t.Merges},
+			{"ai_intern_escalations_total", "Flows handed to a human", t.Escalations},
+		} {
+			fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %d\n\n", m.name, m.help, m.name, m.name, m.v)
+		}
+	}
+	if ms.Spend != nil {
+		fmt.Fprintf(w, "# HELP ai_intern_project_spend_dollars Total model spend for the project\n# TYPE ai_intern_project_spend_dollars gauge\nai_intern_project_spend_dollars %.6f\n", ms.Spend())
+	}
 }
 
 // handleHealth serves a health check endpoint

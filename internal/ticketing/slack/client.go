@@ -18,15 +18,18 @@ import (
 type Client struct {
 	api *slackapi.Client
 
+	botOnce sync.Once
+	botID   string
+
 	mu      sync.Mutex
 	threads map[string]ThreadRef // ticket key -> originating Slack thread
 }
 
 // New creates a Slack-backed ticketing client using a bot token
 // (xoxb-...) with chat:write and app_mentions:read/im:history scopes.
-func New(botToken string) *Client {
+func New(botToken string, opts ...slackapi.Option) *Client {
 	return &Client{
-		api:     slackapi.New(botToken),
+		api:     slackapi.New(botToken, opts...),
 		threads: make(map[string]ThreadRef),
 	}
 }
@@ -86,5 +89,41 @@ func (c *Client) PostReply(ctx context.Context, ticketKey, text string) error {
 		slackapi.MsgOptionText(text, false),
 		slackapi.MsgOptionTS(ref.ThreadTS),
 	)
+	return err
+}
+
+// PostToChannel posts a top-level message in a channel.
+func (c *Client) PostToChannel(ctx context.Context, channel, text string) error {
+	_, _, err := c.api.PostMessageContext(ctx, channel, slackapi.MsgOptionText(text, false))
+	return err
+}
+
+// BotUserID returns the bot's own user ID, looked up once.
+func (c *Client) BotUserID(ctx context.Context) string {
+	c.botOnce.Do(func() {
+		if resp, err := c.api.AuthTestContext(ctx); err == nil {
+			c.botID = resp.UserID
+		}
+	})
+	return c.botID
+}
+
+// ChannelNotifier posts orchestrator notifications to one channel.
+type ChannelNotifier struct {
+	Client  *Client
+	Channel string
+}
+
+func (n *ChannelNotifier) Notify(ctx context.Context, text string) error {
+	return n.Client.PostToChannel(ctx, n.Channel, text)
+}
+
+// NotifyConversation replies in an architect conversation's thread.
+func (n *ChannelNotifier) NotifyConversation(ctx context.Context, convID, text string) error {
+	channel, ts, ok := parseConversationID(convID)
+	if !ok {
+		return fmt.Errorf("not a Slack conversation ID: %q", convID)
+	}
+	_, _, err := n.Client.api.PostMessageContext(ctx, channel, slackapi.MsgOptionText(text, false), slackapi.MsgOptionTS(ts))
 	return err
 }

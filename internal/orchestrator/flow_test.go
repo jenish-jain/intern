@@ -1,0 +1,554 @@
+package orchestrator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"intern/internal/config"
+	"intern/internal/repository"
+	"intern/internal/runner"
+)
+
+// flowRepo is a git-backed repository client with scripted PR state.
+type flowRepo struct {
+	gitRepoClient
+	mu            sync.Mutex
+	pr            repository.PRState
+	reviews       []string
+	comments      []string
+	pushes        []string
+	merges        []string
+	mergeErr      error
+	prHeads       []string // head branches of PRs opened through CreatePullRequest
+	humanComments []repository.PRComment
+}
+
+func (r *flowRepo) ListComments(context.Context, string, time.Time) ([]repository.PRComment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.humanComments, nil
+}
+
+func (r *flowRepo) CreateBranch(_ context.Context, b string) error { return r.git("branch", "-f", b) }
+func (r *flowRepo) SyncWithRemote(context.Context) error           { return nil }
+func (r *flowRepo) CreatePullRequest(_ context.Context, base, head, title, body string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.prHeads = append(r.prHeads, head)
+	return fmt.Sprintf("https://github.com/o/r/pull/%d", len(r.prHeads)), nil
+}
+
+func (r *flowRepo) git(args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return &exec.ExitError{Stderr: out}
+	}
+	return nil
+}
+
+func (r *flowRepo) SwitchBranch(_ context.Context, b string) error { return r.git("checkout", "-q", b) }
+func (r *flowRepo) Push(_ context.Context, b string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pushes = append(r.pushes, b)
+	return nil
+}
+func (r *flowRepo) FetchBranch(context.Context, string) error { return nil }
+func (r *flowRepo) GetPR(context.Context, string) (repository.PRState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pr, nil
+}
+func (r *flowRepo) CommentPR(_ context.Context, _, body string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.comments = append(r.comments, body)
+	return nil
+}
+func (r *flowRepo) ReviewPR(_ context.Context, _, body string, cs []repository.ReviewComment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range cs {
+		body += "\n" + c.Path + ":" + c.Body
+	}
+	r.reviews = append(r.reviews, body)
+	return nil
+}
+func (r *flowRepo) AddLabels(_ context.Context, _ string, labels ...string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pr.Labels = append(r.pr.Labels, labels...)
+	return nil
+}
+func (r *flowRepo) RemoveLabel(_ context.Context, _, label string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var keep []string
+	for _, l := range r.pr.Labels {
+		if l != label {
+			keep = append(keep, l)
+		}
+	}
+	r.pr.Labels = keep
+	return nil
+}
+func (r *flowRepo) MergePR(_ context.Context, url, method string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.mergeErr != nil {
+		return r.mergeErr
+	}
+	r.merges = append(r.merges, method)
+	if n := len(r.prHeads); n > 0 {
+		// Plan PRs: actually merge the head into master so the base
+		// branch carries the approved docs.
+		if err := r.git("checkout", "-q", "master"); err != nil {
+			return err
+		}
+		if err := r.git("merge", "-q", "--no-edit", r.prHeads[n-1]); err != nil {
+			return err
+		}
+		return nil
+	}
+	r.pr.Merged = true
+	return nil
+}
+
+// roleRunner answers each role from its own queue of steps.
+type roleRunner struct {
+	mu    sync.Mutex
+	steps map[runner.Role][]func(runner.Job) runner.Result
+	jobs  []runner.Job
+}
+
+func (r *roleRunner) Run(_ context.Context, job runner.Job) (runner.Result, error) {
+	r.mu.Lock()
+	r.jobs = append(r.jobs, job)
+	q := r.steps[job.Role]
+	if len(q) == 0 {
+		r.mu.Unlock()
+		panic("no scripted step for role " + string(job.Role))
+	}
+	step := q[0]
+	r.steps[job.Role] = q[1:]
+	r.mu.Unlock()
+	return step(job), nil
+}
+
+func (r *roleRunner) count(role runner.Role) int {
+	n := 0
+	for _, j := range r.jobs {
+		if j.Role == role {
+			n++
+		}
+	}
+	return n
+}
+
+func review(approve bool, comments ...runner.ReviewComment) func(runner.Job) runner.Result {
+	return func(runner.Job) runner.Result {
+		return runner.Result{Status: runner.StatusDone, Summary: "reviewed", Review: &runner.Review{Approve: approve, Comments: comments}, Usage: runner.Usage{CostUSD: 0.1}}
+	}
+}
+
+// newFlowFixture returns a coordinator whose clone has base branch
+// "master" and a ticket branch "feature/P-1" with the developer's work.
+func newFlowFixture(t *testing.T, cfg *config.Config, rr *roleRunner) (*Coordinator, *flowRepo, *fakeTicketing) {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "repo")
+	if out, err := exec.Command("git", "init", "-q", "-b", "master", dir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s", out)
+	}
+	repo := &flowRepo{gitRepoClient: gitRepoClient{dir: dir}}
+	for _, args := range [][]string{
+		{"config", "user.email", "t@t"}, {"config", "user.name", "t"},
+		{"commit", "-q", "--allow-empty", "-m", "init"},
+		{"checkout", "-q", "-b", "feature/P-1"},
+	} {
+		if err := repo.git(args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	writeFile(t, dir, "app.txt", "v1\n")
+	if err := repo.git("add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.git("commit", "-q", "-m", "dev work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.git("checkout", "-q", "master"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := repository.NewRepositoryPath(root, "repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.BaseBranch = "master"
+	if cfg.MaxReviewRounds == 0 {
+		cfg.MaxReviewRounds = 2
+	}
+	if cfg.AllowedWriteDirs == nil {
+		cfg.AllowedWriteDirs = []string{"*"}
+	}
+	c, ft := newLifecycleCoordinator(t, cfg)
+	c.Runner = rr
+	c.Repository = repository.NewRepositoryService(repo)
+	c.RepoPaths = paths
+	return c, repo, ft
+}
+
+func currentBranch(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestFlow_ReviewRequestsChangesThenApproves(t *testing.T) {
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleReviewer: {
+			review(false, runner.ReviewComment{Path: "app.txt", Line: 1, Body: "should be v2"}),
+			review(true),
+		},
+		runner.RoleDeveloper: {func(j runner.Job) runner.Result {
+			writeFile(t, j.Workdir, "app.txt", "v2\n")
+			return runner.Result{Status: runner.StatusDone, Summary: "bumped to v2", Usage: runner.Usage{CostUSD: 0.2}}
+		}},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{ReviewEnabled: true}, rr)
+	ctx := context.Background()
+
+	c.startFlow(ctx, "P-1", "Bump", "Make it v2", "feature/P-1", "https://github.com/o/r/pull/7", 1.0)
+	if !repo.pr.HasLabel("intern:review") {
+		t.Fatalf("labels = %v", repo.pr.Labels)
+	}
+
+	c.advanceFlows(ctx) // review round 1: changes requested
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "app.txt:1: should be v2") {
+		t.Fatalf("after review 1: %+v", f)
+	}
+	if !strings.Contains(repo.reviews[0], "Changes requested") {
+		t.Errorf("review body = %q", repo.reviews[0])
+	}
+	if got := currentBranch(t, repo.dir); got != "master" {
+		t.Errorf("clone left on %s, want master", got)
+	}
+
+	c.advanceFlows(ctx) // developer fixes and pushes
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageReview || len(repo.pushes) != 1 || repo.pushes[0] != "feature/P-1" {
+		t.Fatalf("after fix: stage %s pushes %v", f.Stage, repo.pushes)
+	}
+	dev := rr.jobs[len(rr.jobs)-1]
+	if dev.Role != runner.RoleDeveloper || !strings.Contains(dev.Feedback, "should be v2") {
+		t.Errorf("developer job missing review feedback: %+v", dev)
+	}
+	if out, _ := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:app.txt").Output(); string(out) != "v2\n" {
+		t.Errorf("fix not committed on the PR branch: %q", out)
+	}
+
+	c.advanceFlows(ctx) // review round 2: approved; no test stage, no auto-merge
+	if flows := c.State.ListFlows(); len(flows) != 1 || flows[0].Stage != StageMerge {
+		t.Errorf("approved flow should wait at ready-to-merge, got %+v", flows)
+	}
+	if repo.pr.HasLabel("intern:review") || !repo.pr.HasLabel("intern:ready-to-merge") {
+		t.Errorf("labels = %v", repo.pr.Labels)
+	}
+	c.advanceFlows(ctx) // waits for a human merge
+	if len(repo.merges) != 0 {
+		t.Error("must not merge without AUTO_MERGE")
+	}
+	if rr.count(runner.RoleReviewer) != 2 {
+		t.Errorf("reviewer ran %d times", rr.count(runner.RoleReviewer))
+	}
+}
+
+func TestFlow_EscalatesAfterMaxRoundsAndResumes(t *testing.T) {
+	reject := review(false, runner.ReviewComment{Path: "app.txt", Line: 1, Body: "no"})
+	fix := func(j runner.Job) runner.Result {
+		writeFile(t, j.Workdir, "app.txt", "try\n")
+		return runner.Result{Status: runner.StatusDone, Summary: "tried"}
+	}
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleReviewer:  {reject, reject, review(true)},
+		runner.RoleDeveloper: {fix},
+	}}
+	c, repo, ft := newFlowFixture(t, &config.Config{ReviewEnabled: true, MaxReviewRounds: 1}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+
+	c.advanceFlows(ctx) // round 1 rejected
+	c.advanceFlows(ctx) // fix
+	c.advanceFlows(ctx) // round 2 rejected, over the limit
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageNeedsHuman || !strings.Contains(f.Reason, "after 2 rounds") {
+		t.Fatalf("expected escalation, got %+v", f)
+	}
+	if !strings.Contains(strings.Join(repo.comments, "\n"), LabelResume) {
+		t.Error("PR comment should explain how to resume")
+	}
+	if len(ft.comments["P-1"]) == 0 {
+		t.Error("ticket should get an escalation comment")
+	}
+
+	c.advanceFlows(ctx) // waiting on a human: nothing runs
+	if n := rr.count(runner.RoleReviewer); n != 2 {
+		t.Fatalf("reviewer ran while waiting for a human: %d", n)
+	}
+
+	repo.pr.Labels = append(repo.pr.Labels, LabelResume)
+	c.advanceFlows(ctx) // resumed back to review
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageReview || f.ReviewRounds != 0 || repo.pr.HasLabel(LabelResume) {
+		t.Fatalf("resume did not reset the flow: %+v labels %v", f, repo.pr.Labels)
+	}
+	c.advanceFlows(ctx)
+	if fl := c.State.ListFlows(); len(fl) != 1 || fl[0].Stage != StageMerge {
+		t.Errorf("approved flow should wait at ready-to-merge, got %+v", fl)
+	}
+}
+
+func TestFlow_MergedPRDropsFlow(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{ReviewEnabled: true}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	repo.pr.Merged = true
+	c.advanceFlows(ctx)
+	if len(c.State.ListFlows()) != 0 {
+		t.Error("flow for a merged PR should be dropped")
+	}
+}
+
+func TestStartFlow_NoStagesEnabled(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{}, &roleRunner{})
+	c.startFlow(context.Background(), "P-1", "s", "d", "feature/P-1", "u/7", 0)
+	if len(c.State.ListFlows()) != 0 || len(repo.pr.Labels) != 0 {
+		t.Error("no flow should start when review, test and auto-merge are off")
+	}
+}
+
+func TestState_FlowsPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s := NewState(path)
+	s.SaveFlow(Flow{TicketKey: "P-1", Stage: StageReview, PRURL: "u"})
+	s2 := NewState(path)
+	if err := s2.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if fl := s2.ListFlows(); len(fl) != 1 || fl[0].Stage != StageReview {
+		t.Errorf("flows after reload = %+v", fl)
+	}
+}
+
+func tester(passed bool, write func(dir string), failures ...string) func(runner.Job) runner.Result {
+	return func(j runner.Job) runner.Result {
+		if write != nil {
+			write(j.Workdir)
+		}
+		return runner.Result{Status: runner.StatusDone, Summary: "tested", Test: &runner.TestReport{Passed: passed, Failures: failures}}
+	}
+}
+
+func TestFlow_TesterFailureGoesToDeveloperThenPasses(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleTester: {
+			tester(false, func(dir string) { writeFile(fx, dir, "tests/accept.sh", "grep -qx v2 app.txt\n") }, "app.txt should say v2"),
+			tester(true, nil),
+		},
+		runner.RoleDeveloper: {func(j runner.Job) runner.Result {
+			writeFile(t, j.Workdir, "app.txt", "v2\n")
+			return runner.Result{Status: runner.StatusDone, Summary: "fixed"}
+		}},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{TestEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	if fl := c.State.ListFlows(); fl[0].Stage != StageTest {
+		t.Fatalf("first stage = %s, want testing", fl[0].Stage)
+	}
+
+	c.advanceFlows(ctx) // tester writes a failing acceptance test
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "app.txt should say v2") {
+		t.Fatalf("after failing test: %+v", f)
+	}
+	if out, err := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:tests/accept.sh").Output(); err != nil || len(out) == 0 {
+		t.Error("tester's test should be committed on the PR branch")
+	}
+	if len(repo.pushes) != 1 || !strings.Contains(repo.comments[0], "Acceptance tests failed") {
+		t.Errorf("pushes %v comments %v", repo.pushes, repo.comments)
+	}
+
+	c.advanceFlows(ctx) // developer fixes; no reviewer, so back to testing
+	c.advanceFlows(ctx) // tester passes
+	if fl := c.State.ListFlows(); len(fl) != 1 || fl[0].Stage != StageMerge {
+		t.Fatalf("expected ready-to-merge, got %+v", fl)
+	}
+}
+
+func TestFlow_TesterTouchingAppCodeEscalates(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleTester: {tester(true, func(dir string) { writeFile(fx, dir, "app.txt", "patched by tester\n") })},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{TestEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageNeedsHuman || !strings.Contains(f.Reason, "app.txt") {
+		t.Fatalf("expected escalation, got %+v", f)
+	}
+	if len(repo.pushes) != 0 {
+		t.Error("tester's out-of-bounds change must not be pushed")
+	}
+	if out, _ := exec.Command("git", "-C", repo.dir, "show", "feature/P-1:app.txt").Output(); string(out) != "v1\n" {
+		t.Errorf("app code changed on branch: %q", out)
+	}
+}
+
+func TestFlow_AutoMergeWaitsForCIThenMerges(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true, MergeMethod: "squash"}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0.5)
+	if fl := c.State.ListFlows(); fl[0].Stage != StageMerge {
+		t.Fatalf("auto-merge only: first stage = %s", fl[0].Stage)
+	}
+
+	repo.pr.Checks = repository.ChecksPending
+	c.advanceFlows(ctx)
+	if len(repo.merges) != 0 {
+		t.Fatal("merged while CI pending")
+	}
+
+	repo.pr.Checks = repository.ChecksSuccess
+	c.advanceFlows(ctx)
+	if len(repo.merges) != 1 || repo.merges[0] != "squash" {
+		t.Fatalf("merges = %v", repo.merges)
+	}
+	if len(c.State.ListFlows()) != 0 {
+		t.Error("merged flow should end")
+	}
+	if !strings.Contains(repo.comments[len(repo.comments)-1], "$0.50") {
+		t.Errorf("merge comment should report cost: %q", repo.comments)
+	}
+}
+
+func TestFlow_AutoMergeFailingCIGoesToDeveloper(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	repo.pr.Checks = repository.ChecksFailure
+	repo.pr.FailedChecks = []string{"test (failure): https://gh/run/1"}
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "https://gh/run/1") {
+		t.Fatalf("got %+v", f)
+	}
+}
+
+func TestFlow_AutoMergeConflictAndErrors(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	repo.pr.Checks = repository.ChecksNone
+
+	repo.mergeErr = fmt.Errorf("merge PR #7: %w", repository.ErrMergeConflict)
+	c.advanceFlows(ctx)
+	f := c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "git merge master") {
+		t.Fatalf("conflict should go to developer: %+v", f)
+	}
+
+	f.Stage, f.Feedback = StageMerge, ""
+	c.State.SaveFlow(f)
+	repo.mergeErr = errors.New("502 bad gateway")
+	for i := 0; i < maxMergeErrors; i++ {
+		c.advanceFlows(ctx)
+	}
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageNeedsHuman || !strings.Contains(f.Reason, "502") {
+		t.Fatalf("repeated merge errors should escalate: %+v", f)
+	}
+}
+
+type recordingNotifier struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (n *recordingNotifier) Notify(_ context.Context, text string) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.msgs = append(n.msgs, text)
+	return nil
+}
+
+func TestFlow_NotifiesOnMergeAndEscalation(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{AutoMerge: true}, &roleRunner{})
+	n := &recordingNotifier{}
+	c.Notifier = n
+	ctx := context.Background()
+
+	c.startFlow(ctx, "P-1", "Add login", "d", "feature/P-1", "https://github.com/o/r/pull/7", 1.5)
+	repo.pr.Checks = repository.ChecksSuccess
+	c.advanceFlows(ctx)
+	if len(n.msgs) != 1 || !strings.Contains(n.msgs[0], "Merged P-1: Add login") {
+		t.Fatalf("notifications = %v", n.msgs)
+	}
+
+	f := Flow{TicketKey: "P-2", PRURL: "https://github.com/o/r/pull/8"}
+	c.escalate(ctx, &f, "tests keep failing")
+	if len(n.msgs) != 2 || !strings.Contains(n.msgs[1], "P-2 needs a human: tests keep failing") {
+		t.Errorf("notifications = %v", n.msgs)
+	}
+}
+
+func TestFlow_ResumeSendsHumanCommentsToDeveloper(t *testing.T) {
+	var fx *testing.T = t
+	rr := &roleRunner{steps: map[runner.Role][]func(runner.Job) runner.Result{
+		runner.RoleDeveloper: {func(j runner.Job) runner.Result {
+			writeFile(fx, j.Workdir, "app.txt", "per human\n")
+			return runner.Result{Status: runner.StatusDone, Summary: "applied the human's guidance"}
+		}},
+	}}
+	c, repo, _ := newFlowFixture(t, &config.Config{ReviewEnabled: true}, rr)
+	ctx := context.Background()
+	c.startFlow(ctx, "P-1", "s", "d", "feature/P-1", "https://github.com/o/r/pull/7", 0)
+	f := c.State.ListFlows()[0]
+	c.escalate(ctx, &f, "stuck")
+
+	repo.humanComments = []repository.PRComment{
+		{Author: "alice", Body: "Use the v3 API instead."},
+		{Author: "alice", Body: "Rename this.", Path: "app.txt", Line: 1},
+	}
+	repo.pr.Labels = append(repo.pr.Labels, LabelResume)
+	c.advanceFlows(ctx)
+	f = c.State.ListFlows()[0]
+	if f.Stage != StageChangesRequested {
+		t.Fatalf("resume with comments should go to the developer, got %s", f.Stage)
+	}
+	for _, want := range []string{"alice: Use the v3 API instead.", "alice on app.txt:1: Rename this."} {
+		if !strings.Contains(f.Feedback, want) {
+			t.Errorf("feedback missing %q:\n%s", want, f.Feedback)
+		}
+	}
+	c.advanceFlows(ctx)
+	if dev := rr.jobs[len(rr.jobs)-1]; !strings.Contains(dev.Feedback, "v3 API") {
+		t.Errorf("developer did not receive the human feedback: %q", dev.Feedback)
+	}
+}

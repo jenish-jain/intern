@@ -22,7 +22,9 @@ var _ agent.Agent = (*Client)(nil)
 
 const url = "https://api.anthropic.com/v1/messages"
 const anthropicVersion = "2023-06-01"
-const model = "claude-opus-4-5-20251101"
+
+// DefaultModel is used when ANTHROPIC_MODEL is not set.
+const DefaultModel = "claude-opus-4-5-20251101"
 
 // Client is an implementation of the agent.Agent interface for Anthropic's Claude API.
 // It handles communication with the Anthropic API for code generation tasks.
@@ -34,8 +36,11 @@ type Client struct {
 
 // NewClient creates a new Anthropic API client with default settings.
 // The client is configured with a 180-second timeout (3 minutes) to handle large contexts
-// from smart context selection, and uses the latest Claude model.
-func NewClient(apiKey string) *Client {
+// from smart context selection, and calls the given model (DefaultModel when empty).
+func NewClient(apiKey, model string) *Client {
+	if model == "" {
+		model = DefaultModel
+	}
 	return &Client{
 		APIKey: apiKey,
 		Model:  model,
@@ -402,10 +407,13 @@ func isBalanced(s string) bool {
 }
 
 // buildUsageMetrics converts Anthropic-specific usage data to provider-agnostic metrics.
-// Calculates cost using the current Claude Sonnet 4 pricing model.
+// Cost uses the pricing of the model the client actually calls.
 func (c *Client) buildUsageMetrics(usage *Usage, contextBytes int) *agent.UsageMetrics {
-	// Calculate cost using the Anthropic pricing model
-	cost := ai.CalculateCost(usage.InputTokens, usage.OutputTokens, &ai.ClaudeSonnet4)
+	pricing, ok := ai.PricingFor(c.Model)
+	if !ok {
+		logger.Warn("No pricing known for model; cost estimate uses default pricing", "model", c.Model)
+	}
+	cost := ai.CalculateCost(usage.InputTokens, usage.OutputTokens, &pricing)
 
 	return &agent.UsageMetrics{
 		InputTokens:   usage.InputTokens,
