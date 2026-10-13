@@ -71,6 +71,10 @@ func (f *fakeServices) handler(t *testing.T) http.Handler {
 			t.Errorf("Anthropic key header = %q", r.Header.Get("x-api-key"))
 		}
 		w.WriteHeader(f.anthropicCode)
+		if f.anthropicCode != http.StatusOK {
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":[]}`))
 	})
 	return mux
@@ -142,9 +146,15 @@ func TestDoctor_ReportsEachProblemWithAFix(t *testing.T) {
 		"Anthropic":       StatusFail,
 	}
 	for name, want := range cases {
-		if r := res[name]; r.Status != want || r.Fix == "" {
-			t.Errorf("%s: status %v fix %q, want status %v with a fix", name, r.Status, r.Fix, want)
+		if r := res[name]; r.Status != want || r.Fix == "" || len(r.Keys) == 0 {
+			t.Errorf("%s: status %v fix %q keys %v, want status %v with a fix and the settings it used", name, r.Status, r.Fix, r.Keys, want)
 		}
+	}
+	if r := res["JIRA"]; strings.Join(r.Keys, ",") != "JIRA_EMAIL,JIRA_API_TOKEN,JIRA_URL" {
+		t.Errorf("JIRA sign-in failure should name the email, token and URL, got %v", r.Keys)
+	}
+	if r := res["Anthropic"]; !strings.Contains(r.Detail, "invalid x-api-key") {
+		t.Errorf("Anthropic failure should include the API's message, got %q", r.Detail)
 	}
 	if _, ok := res["JIRA project"]; ok {
 		t.Error("project checks should be skipped when JIRA sign-in fails")
@@ -171,7 +181,7 @@ func TestDoctor_SkipsWhatTheModeDoesntUse(t *testing.T) {
 			t.Errorf("%s shouldn't be checked in slack mode with the legacy runner", name)
 		}
 	}
-	if r := res["GitHub"]; r.Status != StatusFail || !strings.Contains(r.Detail, "not found") {
+	if r := res["GitHub"]; r.Status != StatusFail || !strings.Contains(r.Detail, "isn't visible") {
 		t.Errorf("missing repo should fail, got %v %q", r.Status, r.Detail)
 	}
 	if _, ok := res["Base branch"]; ok {

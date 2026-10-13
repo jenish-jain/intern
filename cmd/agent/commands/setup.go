@@ -39,6 +39,7 @@ var SlackManifestCmd = &cobra.Command{
 
 func init() {
 	SetupCmd.Flags().String("env-file", ".env", "file to write the configuration to")
+	DoctorCmd.Flags().String("env-file", ".env", "configuration file to check")
 	SlackManifestCmd.Flags().String("url", "", "public URL where intern runs, e.g. https://intern-xyz.a.run.app")
 }
 
@@ -115,10 +116,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		printNextSteps(cmd, mode)
 		return err
 	}
-	if err := godotenv.Overload(envFile); err != nil {
-		return err
-	}
-	failed := runDoctor(cmd)
+	failed := runDoctor(cmd, envFile)
 	printNextSteps(cmd, mode)
 	if failed {
 		return fmt.Errorf("some checks failed; fix them and run agent doctor")
@@ -144,19 +142,32 @@ var DoctorCmd = &cobra.Command{
 	Short:        "Check the configuration: credentials, repo, JIRA workflow, Slack and tools",
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if runDoctor(cmd) {
+		envFile, _ := cmd.Flags().GetString("env-file")
+		if runDoctor(cmd, envFile) {
 			return fmt.Errorf("some checks failed")
 		}
 		return nil
 	},
 }
 
-// runDoctor prints each check and reports whether any failed.
-func runDoctor(cmd *cobra.Command) bool {
+// runDoctor prints each check and reports whether any failed. A check that
+// isn't OK lists the settings it used, their values (secrets masked) and
+// whether each came from envFile or the shell.
+func runDoctor(cmd *cobra.Command, envFile string) bool {
 	out := cmd.OutOrStdout()
+	vals := setup.Values{EnvFile: envFile, Shell: setup.CaptureShell(), File: map[string]string{}}
+	if f, err := godotenv.Read(envFile); err == nil {
+		vals.File = f
+		// Like the agent: the shell's values win over the file.
+		_ = godotenv.Load(envFile)
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(out, "✗ Configuration: can't read %s: %v\n", envFile, err)
+		return true
+	}
+
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		fmt.Fprintf(out, "✗ Configuration: %v\n    Fix: run `agent setup`, or set the variable in .env.\n", err)
+		fmt.Fprintf(out, "✗ Configuration: %v\n    Fix: run `agent setup`, or set the variable in %s.\n", err, envFile)
 		return true
 	}
 	fmt.Fprintln(out, "✓ Configuration: valid")
@@ -171,7 +182,13 @@ func runDoctor(cmd *cobra.Command) bool {
 			failed = true
 		}
 		fmt.Fprintf(out, "%s %s: %s\n", mark, r.Name, r.Detail)
-		if r.Fix != "" && r.Status != setup.StatusOK {
+		if r.Status == setup.StatusOK {
+			continue
+		}
+		for _, k := range r.Keys {
+			fmt.Fprintf(out, "    Using: %s\n", vals.Describe(k))
+		}
+		if r.Fix != "" {
 			fmt.Fprintf(out, "    Fix: %s\n", r.Fix)
 		}
 	}

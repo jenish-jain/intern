@@ -23,12 +23,36 @@ const (
 	StatusFail
 )
 
-// Result is one doctor check's outcome, with a fix when it isn't OK.
+// Result is one doctor check's outcome, with a fix when it isn't OK. Keys
+// names the settings the check used, so a failure points at the value to
+// change.
 type Result struct {
 	Name   string
 	Status Status
 	Detail string
 	Fix    string
+	Keys   []string
+}
+
+func ok(name, detail string) Result { return Result{Name: name, Status: StatusOK, Detail: detail} }
+
+func fail(name, detail, fix string, keys ...string) Result {
+	return Result{Name: name, Status: StatusFail, Detail: detail, Fix: fix, Keys: keys}
+}
+
+func warn(name, detail, fix string, keys ...string) Result {
+	return Result{Name: name, Status: StatusWarn, Detail: detail, Fix: fix, Keys: keys}
+}
+
+// withReason appends the service's own explanation, when it gave one.
+func withReason(detail string, code int, reason string) string {
+	switch {
+	case reason != "":
+		return fmt.Sprintf("%s (%d: %s)", detail, code, reason)
+	case code != 0:
+		return fmt.Sprintf("%s (HTTP %d)", detail, code)
+	}
+	return detail
 }
 
 // Doctor checks that a configuration can actually reach everything it
@@ -91,24 +115,24 @@ func (d *Doctor) Run(ctx context.Context) []Result {
 func (d *Doctor) tools(ctx context.Context) []Result {
 	var out []Result
 	if _, err := d.LookPath("git"); err != nil {
-		out = append(out, Result{Name: "git", Status: StatusFail, Detail: "git is not installed", Fix: "Install git."})
+		out = append(out, fail("git", "git is not installed", "Install git."))
 	} else {
-		out = append(out, Result{Name: "git", Status: StatusOK, Detail: "installed"})
+		out = append(out, ok("git", "installed"))
 	}
 	if d.Cfg.AIRunner == "claude-code" {
 		if _, err := d.LookPath("claude"); err != nil {
-			out = append(out, Result{Name: "Claude Code CLI", Status: StatusFail, Detail: "claude is not on PATH",
-				Fix: "Install it with `npm install -g @anthropic-ai/claude-code`, or use the intern Docker image, which includes it."})
+			out = append(out, fail("Claude Code CLI", "claude is not on PATH, and AI_RUNNER=claude-code needs it",
+				"Install it with `npm install -g @anthropic-ai/claude-code`, or use the intern Docker image, which includes it.", "AI_RUNNER"))
 		} else {
 			v, _ := d.Exec(ctx, "claude", "--version")
-			out = append(out, Result{Name: "Claude Code CLI", Status: StatusOK, Detail: strings.TrimSpace(string(v))})
+			out = append(out, ok("Claude Code CLI", strings.TrimSpace(string(v))))
 		}
 		if d.Cfg.Sandbox == "docker" {
 			if _, err := d.Exec(ctx, "docker", "image", "inspect", d.Cfg.SandboxImage); err != nil {
-				out = append(out, Result{Name: "Docker sandbox", Status: StatusFail, Detail: "image " + d.Cfg.SandboxImage + " not found or Docker not running",
-					Fix: "Build it with `docker build -t " + d.Cfg.SandboxImage + " deploy/sandbox` and make sure Docker is running."})
+				out = append(out, fail("Docker sandbox", "image "+d.Cfg.SandboxImage+" not found or Docker not running",
+					"Build it with `docker build -t "+d.Cfg.SandboxImage+" deploy/sandbox` and make sure Docker is running.", "SANDBOX_IMAGE"))
 			} else {
-				out = append(out, Result{Name: "Docker sandbox", Status: StatusOK, Detail: "image " + d.Cfg.SandboxImage})
+				out = append(out, ok("Docker sandbox", "image "+d.Cfg.SandboxImage))
 			}
 		}
 	}
@@ -123,33 +147,35 @@ func (d *Doctor) github(ctx context.Context) []Result {
 			Push bool `json:"push"`
 		} `json:"permissions"`
 	}
-	code, err := d.getJSON(ctx, d.GitHubAPI+"/repos/"+repo, auth, &info)
+	code, reason, err := d.getJSON(ctx, d.GitHubAPI+"/repos/"+repo, auth, &info)
 	switch {
 	case err != nil:
-		return []Result{{Name: "GitHub", Status: StatusFail, Detail: err.Error(), Fix: "Check your network connection."}}
+		return []Result{fail("GitHub", err.Error(), "Check your network connection.")}
 	case code == http.StatusUnauthorized:
-		return []Result{{Name: "GitHub", Status: StatusFail, Detail: "GITHUB_TOKEN was rejected", Fix: "Create a new token; the current one is invalid or expired."}}
+		return []Result{fail("GitHub", withReason("GitHub rejected GITHUB_TOKEN", code, reason),
+			"The token is invalid, expired or revoked. Create a new one and put it in GITHUB_TOKEN.", "GITHUB_TOKEN")}
 	case code == http.StatusNotFound || code == http.StatusForbidden:
-		return []Result{{Name: "GitHub", Status: StatusFail, Detail: repo + " not found with this token",
-			Fix: "Check GITHUB_OWNER and GITHUB_REPO, and give the token access to the repo."}}
+		return []Result{fail("GitHub", withReason(repo+" isn't visible to this token", code, reason),
+			"Check GITHUB_OWNER and GITHUB_REPO, and that the token's repository access includes "+repo+".",
+			"GITHUB_OWNER", "GITHUB_REPO", "GITHUB_TOKEN")}
 	case code != http.StatusOK:
-		return []Result{{Name: "GitHub", Status: StatusFail, Detail: fmt.Sprintf("GitHub returned %d", code)}}
+		return []Result{fail("GitHub", withReason("GitHub returned an error", code, reason), "", "GITHUB_TOKEN")}
 	}
-	out := []Result{{Name: "GitHub", Status: StatusOK, Detail: "can read " + repo}}
+	out := []Result{ok("GitHub", "can read "+repo)}
 	if !info.Permissions.Push {
-		out[0] = Result{Name: "GitHub", Status: StatusWarn, Detail: "the token's user can't push to " + repo,
-			Fix: "Intern pushes branches and opens PRs: give the token Contents, Pull requests and Issues write access."}
+		out[0] = warn("GitHub", "the token's user can't push to "+repo,
+			"Intern pushes branches and opens PRs: give the token Contents, Pull requests and Issues write access.", "GITHUB_TOKEN")
 	}
 
 	base := d.Cfg.BaseBranch
-	code, err = d.getJSON(ctx, d.GitHubAPI+"/repos/"+repo+"/branches/"+url.PathEscape(base), auth, nil)
+	code, _, err = d.getJSON(ctx, d.GitHubAPI+"/repos/"+repo+"/branches/"+url.PathEscape(base), auth, nil)
 	switch {
 	case err != nil:
 	case code == http.StatusNotFound:
-		out = append(out, Result{Name: "Base branch", Status: StatusFail, Detail: "branch " + base + " doesn't exist",
-			Fix: "Set BASE_BRANCH to the repo's default branch, or push a first commit to " + base + "."})
+		out = append(out, fail("Base branch", "branch "+base+" doesn't exist in "+repo,
+			"Set BASE_BRANCH to the repo's default branch, or push a first commit to "+base+".", "BASE_BRANCH"))
 	case code == http.StatusOK:
-		out = append(out, Result{Name: "Base branch", Status: StatusOK, Detail: base})
+		out = append(out, ok("Base branch", base))
 	}
 	return out
 }
@@ -157,21 +183,24 @@ func (d *Doctor) github(ctx context.Context) []Result {
 func (d *Doctor) jira(ctx context.Context) []Result {
 	base := strings.TrimRight(d.Cfg.JiraURL, "/")
 	auth := map[string]string{"Accept": "application/json"}
-	req := func(path string, v any) (int, error) {
+	req := func(path string, v any) (int, string, error) {
 		return d.getJSONBasic(ctx, base+path, d.Cfg.JiraEmail, d.Cfg.JiraAPIToken, auth, v)
 	}
 
-	code, err := req("/rest/api/3/myself", nil)
+	code, reason, err := req("/rest/api/3/myself", nil)
 	switch {
 	case err != nil:
-		return []Result{{Name: "JIRA", Status: StatusFail, Detail: err.Error(), Fix: "Check JIRA_URL."}}
+		return []Result{fail("JIRA", "can't reach JIRA: "+err.Error(), "Check JIRA_URL, e.g. https://your-company.atlassian.net.", "JIRA_URL")}
 	case code == http.StatusUnauthorized || code == http.StatusForbidden:
-		return []Result{{Name: "JIRA", Status: StatusFail, Detail: "JIRA rejected JIRA_EMAIL and JIRA_API_TOKEN",
-			Fix: "Check the email, and create a new token at https://id.atlassian.com/manage-profile/security/api-tokens."}}
+		return []Result{fail("JIRA", withReason("JIRA rejected the email and API token", code, reason),
+			"The token must be created while signed in to id.atlassian.com as JIRA_EMAIL, and not be expired or revoked.",
+			"JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_URL")}
+	case code == http.StatusNotFound:
+		return []Result{fail("JIRA", withReason(base+" isn't a JIRA Cloud site", code, reason), "Check JIRA_URL.", "JIRA_URL")}
 	case code != http.StatusOK:
-		return []Result{{Name: "JIRA", Status: StatusFail, Detail: fmt.Sprintf("JIRA returned %d", code), Fix: "Check JIRA_URL."}}
+		return []Result{fail("JIRA", withReason("JIRA returned an error", code, reason), "Check JIRA_URL.", "JIRA_URL")}
 	}
-	out := []Result{{Name: "JIRA", Status: StatusOK, Detail: "signed in as " + d.Cfg.JiraEmail}}
+	out := []Result{ok("JIRA", "signed in as "+d.Cfg.JiraEmail)}
 
 	key := d.Cfg.JiraProject
 	var types []struct {
@@ -180,17 +209,17 @@ func (d *Doctor) jira(ctx context.Context) []Result {
 			Name string `json:"name"`
 		} `json:"statuses"`
 	}
-	code, err = req("/rest/api/3/project/"+url.PathEscape(key)+"/statuses", &types)
+	code, reason, err = req("/rest/api/3/project/"+url.PathEscape(key)+"/statuses", &types)
 	switch {
 	case err != nil:
 		return out
 	case code == http.StatusNotFound:
-		return append(out, Result{Name: "JIRA project", Status: StatusFail, Detail: "project " + key + " not found",
-			Fix: "Check JIRA_PROJECT_KEY, and that the JIRA user can see the project."})
+		return append(out, fail("JIRA project", withReason("project "+key+" not found", code, reason),
+			"Use the project's key (the prefix of its ticket numbers, e.g. PROJ in PROJ-12), and check JIRA_EMAIL can see it.", "JIRA_PROJECT_KEY"))
 	case code != http.StatusOK:
-		return append(out, Result{Name: "JIRA project", Status: StatusFail, Detail: fmt.Sprintf("JIRA returned %d for project %s", code, key)})
+		return append(out, fail("JIRA project", withReason("JIRA returned an error for project "+key, code, reason), "", "JIRA_PROJECT_KEY"))
 	}
-	out = append(out, Result{Name: "JIRA project", Status: StatusOK, Detail: key})
+	out = append(out, ok("JIRA project", key))
 
 	issueType := d.Cfg.JiraIssueType
 	if issueType == "" {
@@ -207,8 +236,8 @@ func (d *Doctor) jira(ctx context.Context) []Result {
 		}
 	}
 	if !found {
-		out = append(out, Result{Name: "JIRA workflow", Status: StatusWarn, Detail: "issue type " + issueType + " isn't in project " + key,
-			Fix: "Set JIRA_ISSUE_TYPE to an issue type the project has."})
+		out = append(out, warn("JIRA workflow", "issue type "+issueType+" isn't in project "+key,
+			"Set JIRA_ISSUE_TYPE to an issue type the project has.", "JIRA_ISSUE_TYPE"))
 	} else {
 		var missing []string
 		for _, s := range RequiredStatuses {
@@ -217,23 +246,23 @@ func (d *Doctor) jira(ctx context.Context) []Result {
 			}
 		}
 		if len(missing) > 0 {
-			out = append(out, Result{Name: "JIRA workflow", Status: StatusWarn, Detail: "missing statuses: " + strings.Join(missing, ", "),
-				Fix: "Add them to the project's workflow, or set the matching JIRA_TRANSITION_* IDs."})
+			out = append(out, warn("JIRA workflow", "missing statuses: "+strings.Join(missing, ", "),
+				"Add them to the project's workflow, or set the matching JIRA_TRANSITION_* IDs."))
 		} else {
-			out = append(out, Result{Name: "JIRA workflow", Status: StatusOK, Detail: strings.Join(RequiredStatuses, " → ")})
+			out = append(out, ok("JIRA workflow", strings.Join(RequiredStatuses, " → ")))
 		}
 	}
 
 	var users []struct {
 		AccountID string `json:"accountId"`
 	}
-	code, err = req("/rest/api/3/user/search?query="+url.QueryEscape(d.Cfg.AgentUsername), &users)
+	code, _, err = req("/rest/api/3/user/search?query="+url.QueryEscape(d.Cfg.AgentUsername), &users)
 	if err == nil && code == http.StatusOK {
 		if len(users) == 0 {
-			out = append(out, Result{Name: "JIRA agent user", Status: StatusWarn, Detail: "no JIRA user matches " + d.Cfg.AgentUsername,
-				Fix: "Set AGENT_USERNAME to the agent's display name or email, or set JIRA_AGENT_ACCOUNT_ID."})
+			out = append(out, warn("JIRA agent user", "no JIRA user matches "+d.Cfg.AgentUsername,
+				"Set AGENT_USERNAME to the agent's display name or email, or set JIRA_AGENT_ACCOUNT_ID.", "AGENT_USERNAME"))
 		} else {
-			out = append(out, Result{Name: "JIRA agent user", Status: StatusOK, Detail: d.Cfg.AgentUsername})
+			out = append(out, ok("JIRA agent user", d.Cfg.AgentUsername))
 		}
 	}
 	return out
@@ -246,37 +275,37 @@ func (d *Doctor) slack(ctx context.Context) Result {
 		Team  string `json:"team"`
 		User  string `json:"user"`
 	}
-	code, err := d.getJSON(ctx, d.SlackAPI+"/auth.test", map[string]string{"Authorization": "Bearer " + d.Cfg.SlackBotToken}, &resp)
+	code, _, err := d.getJSON(ctx, d.SlackAPI+"/auth.test", map[string]string{"Authorization": "Bearer " + d.Cfg.SlackBotToken}, &resp)
 	switch {
 	case err != nil:
-		return Result{Name: "Slack", Status: StatusFail, Detail: err.Error(), Fix: "Check your network connection."}
+		return fail("Slack", err.Error(), "Check your network connection.")
 	case code != http.StatusOK || !resp.OK:
-		return Result{Name: "Slack", Status: StatusFail, Detail: "SLACK_BOT_TOKEN was rejected: " + resp.Error,
-			Fix: "Copy the Bot User OAuth Token (xoxb-...) from the app's OAuth & Permissions page."}
+		return fail("Slack", withReason("Slack rejected SLACK_BOT_TOKEN", code, resp.Error),
+			"Copy the Bot User OAuth Token (xoxb-...) from the app's OAuth & Permissions page.", "SLACK_BOT_TOKEN")
 	}
 	detail := fmt.Sprintf("bot @%s in %s", resp.User, resp.Team)
 	if d.Cfg.SlackArchitectChannel != "" || d.Cfg.SlackNotifyChannel != "" {
 		detail += "; invite the bot to the architect and notify channels"
 	}
-	return Result{Name: "Slack", Status: StatusOK, Detail: detail}
+	return ok("Slack", detail)
 }
 
 func (d *Doctor) anthropic(ctx context.Context) Result {
 	headers := map[string]string{"x-api-key": d.Cfg.AnthropicAPIKey, "anthropic-version": "2023-06-01"}
-	code, err := d.getJSON(ctx, d.AnthropicAPI+"/v1/models?limit=1", headers, nil)
+	code, reason, err := d.getJSON(ctx, d.AnthropicAPI+"/v1/models?limit=1", headers, nil)
 	switch {
 	case err != nil:
-		return Result{Name: "Anthropic", Status: StatusFail, Detail: err.Error(), Fix: "Check your network connection."}
+		return fail("Anthropic", err.Error(), "Check your network connection.")
 	case code == http.StatusUnauthorized || code == http.StatusForbidden:
-		return Result{Name: "Anthropic", Status: StatusFail, Detail: "ANTHROPIC_API_KEY was rejected",
-			Fix: "Create a key at https://console.anthropic.com/settings/keys."}
+		return fail("Anthropic", withReason("Anthropic rejected ANTHROPIC_API_KEY", code, reason),
+			"Create a key at https://console.anthropic.com/settings/keys.", "ANTHROPIC_API_KEY")
 	case code != http.StatusOK:
-		return Result{Name: "Anthropic", Status: StatusWarn, Detail: fmt.Sprintf("Anthropic API returned %d", code)}
+		return warn("Anthropic", withReason("Anthropic API returned an error", code, reason), "", "ANTHROPIC_API_KEY")
 	}
-	return Result{Name: "Anthropic", Status: StatusOK, Detail: "API key works"}
+	return ok("Anthropic", "API key works")
 }
 
-func (d *Doctor) getJSON(ctx context.Context, u string, headers map[string]string, v any) (int, error) {
+func (d *Doctor) getJSON(ctx context.Context, u string, headers map[string]string, v any) (int, string, error) {
 	return d.do(ctx, u, func(r *http.Request) {
 		for k, val := range headers {
 			r.Header.Set(k, val)
@@ -284,7 +313,7 @@ func (d *Doctor) getJSON(ctx context.Context, u string, headers map[string]strin
 	}, v)
 }
 
-func (d *Doctor) getJSONBasic(ctx context.Context, u, user, pass string, headers map[string]string, v any) (int, error) {
+func (d *Doctor) getJSONBasic(ctx context.Context, u, user, pass string, headers map[string]string, v any) (int, string, error) {
 	return d.do(ctx, u, func(r *http.Request) {
 		r.SetBasicAuth(user, pass)
 		for k, val := range headers {
@@ -293,25 +322,59 @@ func (d *Doctor) getJSONBasic(ctx context.Context, u, user, pass string, headers
 	}, v)
 }
 
-func (d *Doctor) do(ctx context.Context, u string, prep func(*http.Request), v any) (int, error) {
+// do sends a GET and decodes a 200 response into v. For any other status
+// it returns the service's error message, when the body has one.
+func (d *Doctor) do(ctx context.Context, u string, prep func(*http.Request), v any) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	prep(req)
 	resp, err := d.HTTP.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return resp.StatusCode, err
+		return resp.StatusCode, "", err
 	}
-	if v != nil && resp.StatusCode == http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, errorMessage(body), nil
+	}
+	if v != nil {
 		if err := json.Unmarshal(body, v); err != nil {
-			return resp.StatusCode, fmt.Errorf("unexpected response from %s: %w", req.URL.Host, err)
+			return resp.StatusCode, "", fmt.Errorf("unexpected response from %s: %w", req.URL.Host, err)
 		}
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, "", nil
+}
+
+// errorMessage pulls the human-readable message out of an error body from
+// GitHub ({"message"}), JIRA ({"errorMessages"}), Anthropic ({"error":
+// {"message"}}) or a plain-text response.
+func errorMessage(body []byte) string {
+	var e struct {
+		Message       string   `json:"message"`
+		ErrorMessages []string `json:"errorMessages"`
+		Error         struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &e) == nil {
+		switch {
+		case e.Message != "":
+			return e.Message
+		case len(e.ErrorMessages) > 0:
+			return strings.Join(e.ErrorMessages, "; ")
+		case e.Error.Message != "":
+			return e.Error.Message
+		}
+		return ""
+	}
+	text := strings.TrimSpace(string(body))
+	if len(text) > 120 || strings.HasPrefix(text, "<") {
+		return ""
+	}
+	return text
 }

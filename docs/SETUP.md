@@ -63,7 +63,7 @@ It builds intern, asks for each setting with a sensible default, and writes `.en
 ✓ Anthropic: API key works
 ```
 
-`✗` blocks intern from working; `!` is a warning worth fixing. Run `agent doctor` (or `make doctor`) any time after editing `.env`.
+`✗` blocks intern from working; `!` is a warning worth fixing. A check that isn't OK lists each setting it used (`Using:`), with secrets masked and whether the value came from `.env` or from your shell (a variable exported in the shell overrides `.env`). Run `agent doctor` (or `make doctor`) any time after editing `.env`.
 
 ## 4. Deploy
 
