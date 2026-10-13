@@ -196,3 +196,18 @@ func TestIsApproval(t *testing.T) {
 		}
 	}
 }
+
+func TestConverse_LegacyRunnerExplainsSetup(t *testing.T) {
+	c, repo, _ := newFlowFixture(t, &config.Config{}, &roleRunner{})
+	c.Runner = newLegacyRunner(c)
+	reply, err := c.Converse(context.Background(), "C9", "plan: build a todo app")
+	if err != nil {
+		t.Fatalf("Converse: %v", err)
+	}
+	if !strings.Contains(reply, "AI_RUNNER=claude-code") {
+		t.Errorf("reply should explain the runner setting, got %q", reply)
+	}
+	if len(repo.pushes) != 0 {
+		t.Error("nothing should be pushed")
+	}
+}

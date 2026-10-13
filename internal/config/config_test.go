@@ -98,7 +98,7 @@ func TestConfig_Validate_OllaMissingModel(t *testing.T) {
 	cfg := validConfig()
 	cfg.AIProvider = "ollama"
 	cfg.AnthropicAPIKey = "" // Not needed
-	cfg.OllamaModel = ""      // Missing!
+	cfg.OllamaModel = ""     // Missing!
 	cfg.OllamaBaseURL = "http://localhost:11434"
 
 	err := cfg.Validate()
@@ -420,6 +420,8 @@ func TestConfig_Validate_Runner(t *testing.T) {
 		{"unknown sandbox", func(c *Config) { c.AIRunner = "claude-code"; c.Sandbox = "vm" }, "SANDBOX"},
 		{"bad timeout", func(c *Config) { c.AIRunner = "claude-code"; c.RunnerTimeout = "soon" }, "RUNNER_TIMEOUT"},
 		{"unknown runner", func(c *Config) { c.AIRunner = "gpt" }, "AI_RUNNER"},
+		{"architect channel needs claude-code", func(c *Config) { c.SlackArchitectChannel = "C123" }, "SLACK_ARCHITECT_CHANNEL"},
+		{"architect channel with claude-code", func(c *Config) { c.AIRunner = "claude-code"; c.SlackArchitectChannel = "C123" }, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

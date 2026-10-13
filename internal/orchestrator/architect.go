@@ -64,6 +64,9 @@ func planBranch(convID string, round int) string {
 // convID and returns the reply to post. It holds the repository lock for
 // the whole exchange, since the architect works in the shared clone.
 func (c *Coordinator) Converse(ctx context.Context, convID, message string) (string, error) {
+	if _, legacy := c.Runner.(*legacyRunner); legacy {
+		return "Planning needs the architect persona, which runs on Claude Code. Set AI_RUNNER=claude-code (with the claude CLI installed and ANTHROPIC_API_KEY set) and restart intern.", nil
+	}
 	c.repoMu.Lock()
 	defer c.repoMu.Unlock()
 	return c.converse(ctx, convID, message)

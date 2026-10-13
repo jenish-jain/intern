@@ -389,6 +389,10 @@ func (c *Config) Validate() error {
 		return errors.NewConfigInvalidError("REVIEW_ENABLED/TEST_ENABLED", true,
 			"the reviewer and tester personas require AI_RUNNER=claude-code")
 	}
+	if c.SlackArchitectChannel != "" && c.AIRunner != "claude-code" {
+		return errors.NewConfigInvalidError("SLACK_ARCHITECT_CHANNEL", c.SlackArchitectChannel,
+			"the architect persona requires AI_RUNNER=claude-code")
+	}
 	switch c.MergeMethod {
 	case "", "squash", "merge", "rebase":
 	default:
