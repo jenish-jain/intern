@@ -226,7 +226,7 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 		return err
 	}
 	defer cleanup()
-	res, err := c.Runner.Run(ctx, runner.Job{
+	res, err := c.runModel(ctx, runner.Job{
 		Role: runner.RoleReviewer, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(),
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
@@ -343,7 +343,7 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 	if err != nil {
 		return err
 	}
-	res, err := c.Runner.Run(ctx, runner.Job{
+	res, err := c.runModel(ctx, runner.Job{
 		Role: runner.RoleTester, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(),
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},

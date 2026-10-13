@@ -126,14 +126,14 @@ func (c *Coordinator) planRound(ctx context.Context, conv *Conversation, message
 		Workdir: repoRoot, BaseBranch: c.baseBranch(), SessionID: conv.SessionID,
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
 	}
-	res, err := c.Runner.Run(ctx, job)
+	res, err := c.runModel(ctx, job)
 	if err != nil && job.SessionID != "" {
 		// The session may be gone (new instance, cleared cache). The docs
 		// on the branch carry the plan, so start a fresh session.
 		logger.Warn("Architect session resume failed; starting a fresh session", "conversation", conv.ID, "error", err)
 		job.SessionID = ""
 		job.Feedback = "This continues an earlier planning conversation whose chat history is unavailable. The plan so far is in the repository docs and backlog.\n\n" + job.Feedback
-		res, err = c.Runner.Run(ctx, job)
+		res, err = c.runModel(ctx, job)
 	}
 	conv.CostUSD += res.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleArchitect, res.Usage.CostUSD)

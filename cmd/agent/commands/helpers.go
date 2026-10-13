@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"intern/internal/cloudrun"
 	"intern/internal/config"
 	"intern/internal/errors"
 	"intern/internal/orchestrator"
@@ -142,6 +143,10 @@ func InitDependencies(ctx context.Context) (*Dependencies, error) {
 		coordinator.Runner = r
 	}
 	logger.Info("Initialized runner", "runner", cfg.AIRunner, "sandbox", cfg.Sandbox)
+	// On Cloud Run, an unrecoverable outage scales the service to zero.
+	if sl, ok := cloudrun.FromEnv(); ok {
+		coordinator.Sleeper = sl
+	}
 
 	return &Dependencies{
 		Config:       cfg,

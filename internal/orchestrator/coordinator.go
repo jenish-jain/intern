@@ -38,6 +38,9 @@ type Coordinator struct {
 	// Notifier announces events a person should see (escalations,
 	// merges). Optional.
 	Notifier Notifier
+	// Sleeper scales the service to zero after an unrecoverable outage.
+	// Optional; see outage.go.
+	Sleeper Sleeper
 
 	// repoMu serializes use of the shared clone's working tree between the
 	// poll loop and request-driven work (Slack asks, architect
@@ -51,6 +54,10 @@ type Coordinator struct {
 
 	// sched tracks running jobs; see scheduler.go.
 	sched scheduler
+	// outage pauses model jobs while the API is unavailable; see outage.go.
+	outage outage
+	// notified dedupes repeated failure notifications; see notify.go.
+	notified sync.Map
 
 	team       teamMetrics
 	budgetOnce sync.Once
@@ -170,6 +177,12 @@ func (c *Coordinator) runCycle(ctx context.Context, interval time.Duration) {
 // tickets, each in its own worktree, and the next poll starts whatever has
 // become ready meanwhile.
 func (c *Coordinator) cycle(ctx context.Context, interval time.Duration) time.Duration {
+	if e, asleep := c.modelPaused(); asleep {
+		// Asleep after an unrecoverable outage: do nothing until a person
+		// wakes intern, which restarts the process.
+		logger.Info("Asleep: model API unavailable until a person fixes it", "reason", e.Reason)
+		return time.Hour
+	}
 	c.repoMu.Lock()
 	// Ensure local repo is up to date before each cycle
 	err := c.prepareRepository(ctx)
