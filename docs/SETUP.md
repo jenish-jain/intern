@@ -76,8 +76,9 @@ scripts/deploy-cloudrun.sh           # or: REGION=asia-south1 SERVICE=intern scr
 
 The script:
 
+- updates an existing service in its own region and keeps its service account (set `REGION`, `SERVICE` or `SERVICE_ACCOUNT` to override);
 - enables the Cloud Run, Secret Manager, Cloud Build and Artifact Registry APIs;
-- stores `GITHUB_TOKEN`, `JIRA_API_TOKEN`, `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in Secret Manager (a new version only when a value changed) and lets the service read them;
+- stores `GITHUB_TOKEN`, `JIRA_API_TOKEN`, `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` in Secret Manager (a new version only when a value changed) and lets the service's account read them;
 - passes every other `.env` setting as an environment variable, replacing the service's previous ones, so `.env` is the source of truth;
 - builds the image from the repo with Cloud Build (or deploys `IMAGE=…`);
 - in team mode, runs exactly one always-on instance, because the JIRA poll loop and the conversation state live in that process;

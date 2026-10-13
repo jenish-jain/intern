@@ -13,23 +13,27 @@
 # Settings (environment):
 #   ENV_FILE  config to deploy (default .env)
 #   PROJECT   GCP project (default: gcloud's current project)
-#   REGION    Cloud Run region (default us-central1)
+#   REGION    Cloud Run region (default: the existing service's region,
+#             else gcloud's run/region, else us-central1)
 #   SERVICE   Cloud Run service name (default ai-intern-agent)
 #   IMAGE     deploy this image instead of building the repo with Cloud Build
 #   SECRETS   "manager" (default) or "env" to pass secrets as plain env vars
+#   SERVICE_ACCOUNT  account the service runs as (default: the existing
+#             service's, else the Compute Engine default)
 #   DRY_RUN   1 prints commands instead of running them
 set -euo pipefail
 
 ENV_FILE=${ENV_FILE:-.env}
-REGION=${REGION:-us-central1}
+REGION=${REGION:-}
 SERVICE=${SERVICE:-ai-intern-agent}
 IMAGE=${IMAGE:-}
 SECRETS=${SECRETS:-manager}
 DRY_RUN=${DRY_RUN:-0}
 
 SECRET_KEYS=(GITHUB_TOKEN JIRA_API_TOKEN ANTHROPIC_API_KEY SLACK_BOT_TOKEN SLACK_SIGNING_SECRET)
-# PORT is set by Cloud Run; PUBLIC_URL is only used to write the Slack manifest.
-SKIP_KEYS=(PORT PUBLIC_URL)
+# PORT is set by Cloud Run; PUBLIC_URL is only used to write the Slack manifest;
+# DRY_RUN is this script's setting, not the agent's.
+SKIP_KEYS=(PORT PUBLIC_URL DRY_RUN)
 
 die() { echo "error: $*" >&2; exit 1; }
 run() {
@@ -45,14 +49,28 @@ command -v gcloud >/dev/null || die "gcloud is not installed: https://cloud.goog
 [[ -f $ENV_FILE ]] || die "$ENV_FILE not found; run \`agent setup\` first"
 PROJECT=${PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}
 [[ -n $PROJECT ]] || die "set PROJECT, or run \`gcloud config set project <id>\`"
+if [[ -z $REGION ]]; then
+  # Update an existing service where it runs, rather than creating a second
+  # one in another region.
+  found=$(gcloud run services list --project "$PROJECT" --filter "metadata.name=$SERVICE" --format 'value(region)' 2>/dev/null || true)
+  if [[ $(printf '%s\n' "$found" | grep -c .) -gt 1 ]]; then
+    die "$SERVICE exists in several regions ($(echo $found)); set REGION"
+  fi
+  REGION=${found:-$(gcloud config get-value run/region 2>/dev/null || true)}
+  REGION=${REGION:-us-central1}
+fi
 
-# Load .env the way the agent does: single-quoted values are literal.
+# Load .env the way the agent does (single-quoted values are literal), into
+# ENV_<key> variables so its settings can't change this script's own, such
+# as DRY_RUN or REGION.
 keys=()
 while IFS= read -r key; do keys+=("$key"); done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" | cut -d= -f1 | awk '!seen[$0]++')
-set -a
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-set +a
+eval "$(env -i /bin/bash -c 'set -a; . "$1"; shift; for k in "$@"; do printf "ENV_%s=%q\n" "$k" "${!k-}"; done' _ "$ENV_FILE" "${keys[@]}")"
+env_get() { local v="ENV_$1"; printf '%s' "${!v-}"; }
+GITHUB_TOKEN=$(env_get GITHUB_TOKEN)
+TICKETING_MODE=$(env_get TICKETING_MODE)
+SLACK_BOT_TOKEN=$(env_get SLACK_BOT_TOKEN)
+SANDBOX=$(env_get SANDBOX)
 
 [[ -n ${GITHUB_TOKEN:-} ]] || die "$ENV_FILE has no GITHUB_TOKEN; run \`agent setup\`"
 team=0
@@ -75,7 +93,7 @@ trap 'rm -f "$envfile"' EXIT
 secret_flags=()
 for key in "${keys[@]}"; do
   contains "$key" "${SKIP_KEYS[@]}" && continue
-  val=${!key-}
+  val=$(env_get "$key")
   [[ -z $val ]] && continue
   if [[ $SECRETS == manager ]] && contains "$key" "${SECRET_KEYS[@]}"; then
     secret_flags+=("$key")
@@ -91,11 +109,18 @@ fi
 
 secrets_arg=""
 if [[ ${#secret_flags[@]} -gt 0 ]]; then
-  number=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
-  runtime_sa=${SERVICE_ACCOUNT:-$number-compute@developer.gserviceaccount.com}
+  # The account the service runs as reads the secrets: SERVICE_ACCOUNT, else
+  # the existing service's, else Compute Engine's default.
+  runtime_sa=${SERVICE_ACCOUNT:-$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+    --format 'value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)}
+  if [[ -z $runtime_sa ]]; then
+    number=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
+    runtime_sa=$number-compute@developer.gserviceaccount.com
+  fi
+  echo "Secrets will be readable by $runtime_sa"
   for key in "${secret_flags[@]}"; do
     name="intern-$(echo "$key" | tr 'A-Z_' 'a-z-')"
-    val=${!key}
+    val=$(env_get "$key")
     if ! gcloud secrets describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
       run gcloud secrets create "$name" --project "$PROJECT" --replication-policy automatic
     fi
