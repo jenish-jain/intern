@@ -9,8 +9,8 @@ import (
 func main() {
 	logger.Init("debug")
 
+	// cobra already prints the error as "Error: ...".
 	if err := Execute(); err != nil {
-		logger.Error("Command failed: %v", err)
 		os.Exit(1)
 	}
 }
