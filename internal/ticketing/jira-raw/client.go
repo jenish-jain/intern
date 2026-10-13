@@ -171,8 +171,8 @@ func (c *client) GetTickets(ctx context.Context, assignee, project string) ([]ti
 	// "In Progress" tickets are included so work interrupted by a restart or
 	// deploy is picked up again: the poll loop only fetches between cycles,
 	// when none of this process's tickets are running. "In Review" tickets
-	// are left to their PR flow.
-	jql := fmt.Sprintf("assignee = '%s' AND project = '%s' AND (statusCategory = 'To Do' OR status = 'In Progress') ORDER BY priority ASC, key ASC",
+	// are included so their PRs can be tracked again after a restart.
+	jql := fmt.Sprintf("assignee = '%s' AND project = '%s' AND (statusCategory = 'To Do' OR status in ('In Progress', 'In Review')) ORDER BY priority ASC, key ASC",
 		assigneeEscaped, projectEscaped)
 
 	logger.Debug("fetching tickets from JIRA", "query", jql)

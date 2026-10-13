@@ -60,6 +60,10 @@ func (c *Coordinator) dispatchTickets(ctx context.Context, tickets []ticketing.T
 	sem := make(chan struct{}, maxWorkers)
 	var wg sync.WaitGroup
 	for _, t := range tickets {
+		if t.Status == ticketing.StatusInReview {
+			c.trackReviewTicket(ctx, t)
+			continue
+		}
 		if c.State.IsProcessed(t.Key) {
 			continue
 		}

@@ -29,6 +29,7 @@ type flowRepo struct {
 	mergeErr      error
 	prHeads       []string // head branches of PRs opened through CreatePullRequest
 	humanComments []repository.PRComment
+	foundPR       string // FindPR's answer
 }
 
 func (r *flowRepo) ListComments(context.Context, string, time.Time) ([]repository.PRComment, error) {
@@ -69,6 +70,11 @@ func (r *flowRepo) ForcePush(ctx context.Context, b string) error {
 	return r.Push(ctx, b)
 }
 func (r *flowRepo) FetchBranch(context.Context, string) error { return nil }
+func (r *flowRepo) FindPR(context.Context, string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.foundPR, nil
+}
 func (r *flowRepo) GetPR(context.Context, string) (repository.PRState, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

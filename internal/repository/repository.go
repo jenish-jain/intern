@@ -136,6 +136,9 @@ type PullRequests interface {
 	// FetchBranch makes the local branch match the remote branch.
 	FetchBranch(ctx context.Context, branch string) error
 	GetPR(ctx context.Context, prURL string) (PRState, error)
+	// FindPR returns the URL of the newest PR from branch in any state, or
+	// "" when there is none.
+	FindPR(ctx context.Context, branch string) (string, error)
 	// CommentPR posts a plain comment on the PR conversation.
 	CommentPR(ctx context.Context, prURL, body string) error
 	// ReviewPR posts a review (as a comment, since a bot can't approve
@@ -164,6 +167,14 @@ func (r *RepositoryService) prs() (PullRequests, error) {
 		return nil, ErrUnsupported
 	}
 	return p, nil
+}
+
+func (r *RepositoryService) FindPR(ctx context.Context, branch string) (string, error) {
+	p, err := r.prs()
+	if err != nil {
+		return "", err
+	}
+	return p.FindPR(ctx, branch)
 }
 
 func (r *RepositoryService) FetchBranch(ctx context.Context, branch string) error {
