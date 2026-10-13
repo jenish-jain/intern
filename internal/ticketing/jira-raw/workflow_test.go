@@ -75,17 +75,48 @@ func TestUpdateTicketStatus_ResolvesTransitionByName(t *testing.T) {
 	}
 }
 
-func TestUpdateTicketStatus_ConfiguredIDSkipsLookup(t *testing.T) {
-	c, reqs := newTestClient(t, func(r *http.Request) (int, string) { return 204, "" })
-	err := c.UpdateTicketStatus(context.Background(), "P-1", "Done", map[string]string{"Done": "99"})
-	if err != nil {
+func postedTransition(t *testing.T, reqs []recorded) any {
+	t.Helper()
+	post := reqs[len(reqs)-1]
+	if post.method != "POST" {
+		t.Fatalf("last request is %s %s, want the transition POST", post.method, post.path)
+	}
+	return post.body["transition"].(map[string]any)["id"]
+}
+
+func TestUpdateTicketStatus_ConfiguredIDThatLeadsThereIsUsed(t *testing.T) {
+	c, reqs := newTestClient(t, func(r *http.Request) (int, string) {
+		if r.Method == "GET" {
+			return 200, `{"transitions":[{"id":"31","name":"Finish","to":{"name":"Done"}},{"id":"77","name":"Close","to":{"name":"Done"}}]}`
+		}
+		return 204, ""
+	})
+	if err := c.UpdateTicketStatus(context.Background(), "P-1", "Done", map[string]string{"Done": "77"}); err != nil {
 		t.Fatalf("UpdateTicketStatus: %v", err)
 	}
-	if len(*reqs) != 1 || (*reqs)[0].method != "POST" {
-		t.Fatalf("expected a single POST, got %+v", *reqs)
+	if id := postedTransition(t, *reqs); id != "77" {
+		t.Errorf("transition id = %v, want the configured 77", id)
 	}
-	if id := (*reqs)[0].body["transition"].(map[string]any)["id"]; id != "99" {
-		t.Errorf("transition id = %v, want 99", id)
+}
+
+// The production bug: JIRA_TRANSITION_DONE=31 from a sample config, where
+// this project's 31 goes to In Review. JIRA accepts it and the ticket never
+// reaches Done, so a configured ID must lead to the status asked for.
+func TestUpdateTicketStatus_ConfiguredIDToAnotherStatusFallsBackToName(t *testing.T) {
+	c, reqs := newTestClient(t, func(r *http.Request) (int, string) {
+		if r.Method == "GET" {
+			return 200, `{"transitions":[
+				{"id":"21","name":"In Progress","to":{"name":"In Progress"}},
+				{"id":"31","name":"In Review","to":{"name":"In Review"}},
+				{"id":"41","name":"Done","to":{"name":"Done"}}]}`
+		}
+		return 204, ""
+	})
+	if err := c.UpdateTicketStatus(context.Background(), "IP-1", "Done", map[string]string{"Done": "31"}); err != nil {
+		t.Fatalf("UpdateTicketStatus: %v", err)
+	}
+	if id := postedTransition(t, *reqs); id != "41" {
+		t.Errorf("transition id = %v, want 41 (Done), not the misconfigured 31 (In Review)", id)
 	}
 }
 
