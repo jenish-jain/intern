@@ -47,6 +47,7 @@ type Flow struct {
 	ReviewRounds int       `json:"review_rounds"`
 	FixRounds    int       `json:"fix_rounds"`
 	MergeErrors  int       `json:"merge_errors,omitempty"` // consecutive unexplained merge failures
+	Conflict     bool      `json:"conflict,omitempty"`     // the PR conflicts with the base branch
 	Feedback     string    `json:"feedback,omitempty"`     // input for the next developer round
 	Reason       string    `json:"reason,omitempty"`       // why a human is needed
 	EscalatedAt  time.Time `json:"escalated_at,omitempty"`
@@ -296,6 +297,12 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 		return err
 	}
 	defer cleanup()
+	// A conflict with the base branch is resolved by merging it in. The
+	// flag is lost when a flow is tracked again after a restart, so a fix
+	// round without other feedback also checks for one.
+	if f.Conflict || (f.Feedback == "" && conflictsWith(ctx, repoRoot, c.baseBranch())) {
+		return c.resolveConflict(ctx, f, repoRoot)
+	}
 	base, err := gate.HeadSHA(ctx, repoRoot)
 	if err != nil {
 		return err
@@ -315,8 +322,16 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 	}, base)
 	f.CostUSD += out.Result.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleDeveloper, out.Result.Usage.CostUSD)
+	if errors.Is(err, errNoChanges) && c.verifyPasses(ctx, repoRoot) {
+		// Nothing to change and verify passes: the branch already meets the
+		// feedback, e.g. someone pushed the fix while this round waited.
+		c.commentPR(ctx, f, "**intern developer: no changes needed.** The branch already addresses the feedback and verify passes, so it goes back through review.\n\n"+out.Result.Summary)
+		f.Feedback = ""
+		c.moveFlow(ctx, f, c.firstStage())
+		return nil
+	}
 	if err != nil {
-		c.escalate(ctx, f, "the developer could not address the feedback: "+truncateNotes(err.Error(), 500))
+		c.escalate(ctx, f, "the developer could not address the feedback: "+truncateNotes(err.Error(), 700))
 		return nil
 	}
 	if err := c.push(ctx, f.Branch, false); err != nil {
@@ -466,8 +481,11 @@ func (c *Coordinator) runMerge(ctx context.Context, f *Flow, pr repository.PRSta
 		c.State.DeleteFlow(f.TicketKey)
 		return nil
 	case errors.Is(err, repository.ErrMergeConflict):
+		// runDeveloperFix merges the base branch in itself and hands only
+		// real conflicts to the developer.
 		f.MergeErrors = 0
-		f.Feedback = fmt.Sprintf("This pull request conflicts with %[1]s. Merge the local %[1]s branch into this branch (`git merge %[1]s`), resolve every conflict so both sides' intent is kept, and make sure verify passes.", c.baseBranch())
+		f.Conflict = true
+		f.Feedback = ""
 		c.moveFlow(ctx, f, StageChangesRequested)
 		return nil
 	default:
