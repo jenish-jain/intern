@@ -14,7 +14,8 @@ Claude Code settings:
 | Variable | Meaning | Default |
 |---|---|---|
 | `CLAUDE_CODE_BIN` | Path to the CLI | `claude` |
-| `CLAUDE_MODEL` | Model alias or ID passed to `--model` | CLI default |
+| `CLAUDE_MODEL` | One model for every job, overriding `MODEL_ROUTING` | unset (routing applies) |
+| `MODEL_ROUTING` | Per-role, per-tier model overrides; see [Model routing](#model-routing) | built-in table |
 | `CLAUDE_EFFORT` | Passed to `--effort` | CLI default |
 | `TICKET_BUDGET_USD` | Spend cap per job (`--max-budget-usd`) | none |
 | `RUNNER_TIMEOUT` | Wall-clock cap per job | `45m` |
@@ -90,3 +91,23 @@ INTERN_E2E_CLAUDE=1 INTERN_E2E_MODEL=haiku go test ./internal/orchestrator -run 
 docker build -t intern-sandbox:latest deploy/sandbox
 INTERN_E2E_DOCKER_IMAGE=intern-sandbox:latest INTERN_E2E_DOCKER_DIR=$HOME/.cache/intern-e2e go test ./internal/sandbox -run TestDocker_Real -v
 ```
+
+## Model routing
+
+Each job's model is picked from its role and a tier, S, M or L, so the expensive models only run where they pay off:
+
+| Role | S | M | L | Tier comes from |
+|---|---|---|---|---|
+| architect | opus | opus | opus | always opus: planning mistakes are the most expensive |
+| developer | haiku | sonnet | opus | the ticket's planned size (`Size:` in the ticket, set by the architect) |
+| reviewer | haiku | sonnet | opus | the change actually made: at most 120 changed lines in 5 files is S, over 400 lines is L (lockfiles don't count) |
+| tester | haiku | sonnet | sonnet | the change actually made, as for the reviewer |
+
+The tier then goes up one step for:
+
+- **criticality:** a ticket with High or Highest priority in JIRA;
+- **struggling:** a developer retrying a ticket that already failed, and each developer fix round after the first.
+
+So simple work stays on Haiku, and only work that proves hard reaches Opus. Unsized tickets count as M.
+
+Override any cell with `MODEL_ROUTING`, a comma-separated list of `role=model` (every tier) or `role:tier=model` entries, for example `MODEL_ROUTING=developer:S=sonnet,reviewer=opus`. Models are anything `claude --model` accepts: an alias or a full model ID. Setting `CLAUDE_MODEL` uses one model for everything instead. The model each job used is in its `Starting Claude Code job` log line, and spend per role is on `/metrics`.

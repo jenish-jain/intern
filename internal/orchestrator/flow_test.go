@@ -76,6 +76,7 @@ func (r *flowRepo) FindPR(context.Context, string) (string, error) {
 	defer r.mu.Unlock()
 	return r.foundPR, nil
 }
+
 // GetPR answers with the shared PR state, merged once MergePR merged that
 // URL, so several flows can share one fake.
 func (r *flowRepo) GetPR(_ context.Context, url string) (repository.PRState, error) {

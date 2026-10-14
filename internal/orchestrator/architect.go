@@ -125,6 +125,7 @@ func (c *Coordinator) planRound(ctx context.Context, conv *Conversation, message
 		Description: message, Feedback: c.architectContext(),
 		Workdir: repoRoot, BaseBranch: c.baseBranch(), SessionID: conv.SessionID,
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+		Model:  c.modelFor(runner.RoleArchitect, "", "", 0),
 	}
 	res, err := c.runModel(ctx, job)
 	if err != nil && job.SessionID != "" {

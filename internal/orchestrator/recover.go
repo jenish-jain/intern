@@ -17,6 +17,7 @@ import (
 // merged. The PR is found by the ticket's branch, and an open one resumes
 // at the stage its intern:* label shows.
 func (c *Coordinator) trackReviewTicket(ctx context.Context, t ticketing.Ticket) {
+	c.rememberTicket(t.Key, t.Priority, 0)
 	if c.State.HasFlow(t.Key) {
 		return
 	}

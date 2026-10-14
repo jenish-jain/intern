@@ -58,6 +58,9 @@ type Coordinator struct {
 	outage outage
 	// notified dedupes repeated failure notifications; see notify.go.
 	notified sync.Map
+	// ticketMeta holds each ticket's priority and attempts for model
+	// routing; see models.go.
+	ticketMeta sync.Map
 
 	team       teamMetrics
 	budgetOnce sync.Once
@@ -344,6 +347,8 @@ func (c *Coordinator) processTicket(ctx context.Context, key, summary, descripti
 		Description: description,
 		Workdir:     repoRoot,
 		Budget:      runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+		// A ticket that already failed gets a stronger model.
+		Model: c.modelFor(runner.RoleDeveloper, key, description, c.metaOf(key).Attempts),
 	}
 	outcome, workErr := c.developAndVerify(ctx, job, base)
 

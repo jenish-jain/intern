@@ -128,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, job runner.Job) (runner.Result, error)
 	env = append(env, "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
 
 	var stdout, stderr bytes.Buffer
-	logger.Info("Starting Claude Code job", "ticket", job.TicketKey, "role", job.Role, "resume", job.SessionID != "")
+	logger.Info("Starting Claude Code job", "ticket", job.TicketKey, "role", job.Role, "model", jobModel(job, r.cfg.Model), "resume", job.SessionID != "")
 	runErr := r.cfg.Sandbox.Run(ctx, sandbox.Cmd{
 		Dir:    job.Workdir,
 		Args:   append([]string{r.cfg.Binary}, args...),
@@ -168,8 +168,8 @@ func (r *Runner) args(job runner.Job, persona string) []string {
 	if job.SessionID != "" {
 		args = append(args, "--resume", job.SessionID)
 	}
-	if r.cfg.Model != "" {
-		args = append(args, "--model", r.cfg.Model)
+	if model := jobModel(job, r.cfg.Model); model != "" {
+		args = append(args, "--model", model)
 	}
 	if r.cfg.Effort != "" {
 		args = append(args, "--effort", r.cfg.Effort)
@@ -425,4 +425,12 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// jobModel is the job's model if it names one, else the runner's default.
+func jobModel(job runner.Job, fallback string) string {
+	if job.Model != "" {
+		return job.Model
+	}
+	return fallback
 }

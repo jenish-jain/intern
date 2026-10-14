@@ -51,6 +51,7 @@ epics:
 Rules:
 - The first ticket is SETUP-1: scaffold the project so the verify commands run and pass, including CI if wanted. Every other ticket depends on it directly or indirectly.
 - One ticket is one pull request a developer can finish in a single sitting: size S or M, about 400 changed lines at most. Split anything larger.
+- Size is implementation difficulty, and it picks the model that builds the ticket, so size honestly: S for straightforward, fully specified work a small, fast model can do (wiring a UI element, a CRUD endpoint, styling, a pure function with stated rules); M for work that needs design judgment or touches several interacting parts; L only for intricate logic such as concurrency, security or tricky algorithms. Most tickets should be S.
 - Prefer vertical slices that deliver working behavior over horizontal layers.
 - Every acceptance criterion must be checkable by an automated test: concrete inputs and observable outputs, not "works well".
 - blocked_by lists only real dependencies, so independent tickets can be built in parallel.
