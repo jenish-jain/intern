@@ -135,6 +135,12 @@ func (c *Coordinator) developAndVerify(ctx context.Context, job runner.Job, base
 			return out, fmt.Errorf("change rejected by gate:\n- %s", strings.Join(msgs, "\n- "))
 		}
 		if len(changes) == 0 {
+			// Keep what the developer said it did: it's the only clue to
+			// why nothing changed.
+			if s := strings.TrimSpace(out.Result.Summary); s != "" {
+				logger.Warn("Developer finished without changes", "ticket", job.TicketKey, "summary", truncateNotes(s, 1000))
+				return out, fmt.Errorf("%w; the developer reported: %s", errNoChanges, truncateNotes(s, 400))
+			}
 			return out, errNoChanges
 		}
 		out.Changes = changes

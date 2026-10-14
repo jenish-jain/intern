@@ -493,8 +493,8 @@ func TestFlow_AutoMergeConflictAndErrors(t *testing.T) {
 	repo.mergeErr = fmt.Errorf("merge PR #7: %w", repository.ErrMergeConflict)
 	c.advanceFlows(ctx)
 	f := c.State.ListFlows()[0]
-	if f.Stage != StageChangesRequested || !strings.Contains(f.Feedback, "git merge master") {
-		t.Fatalf("conflict should go to developer: %+v", f)
+	if f.Stage != StageChangesRequested || !f.Conflict {
+		t.Fatalf("conflict should be flagged for the fix round: %+v", f)
 	}
 
 	f.Stage, f.Feedback = StageMerge, ""
