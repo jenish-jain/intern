@@ -156,3 +156,41 @@ func TestAddWorktree_RelativeWorkingDir(t *testing.T) {
 		t.Fatalf("worktree %s isn't usable: %v %s", dir, err, out)
 	}
 }
+
+// A job that commits on its own, like a developer merging the base branch
+// to resolve a conflict, must have an identity even with no global git
+// config (as in the container). PR #22 stalled on exactly this.
+func TestWorktree_JobCanCommitWithoutGlobalIdentity(t *testing.T) {
+	root := t.TempDir()
+	main := root + "/app"
+	noGlobal := append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	git := func(dir string, args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = dir, noGlobal
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := git(root, "init", "-q", "-b", "master", main); err != nil {
+		t.Fatalf("git init: %s", out)
+	}
+	if out, err := git(main, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"); err != nil {
+		t.Fatalf("seed commit: %s", out)
+	}
+	paths, err := repository.NewRepositoryPath(root, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Coordinator{Cfg: &config.Config{BaseBranch: "master"}, RepoPaths: paths}
+
+	dir, cleanup, err := c.addWorktree(context.Background(), "feature/ip-8")
+	if err != nil {
+		t.Fatalf("addWorktree: %v", err)
+	}
+	defer cleanup()
+	if out, err := git(dir, "commit", "-q", "--allow-empty", "-m", "merge master"); err != nil {
+		t.Fatalf("a job couldn't commit in its worktree: %s", out)
+	}
+	if out, _ := git(dir, "log", "-1", "--format=%an <%ae>"); strings.TrimSpace(out) != commitAuthorName+" <"+commitAuthorEmail+">" {
+		t.Errorf("commit author = %q", out)
+	}
+}

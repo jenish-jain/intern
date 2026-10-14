@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"intern/internal/repository"
 
@@ -56,6 +57,9 @@ func (c *Coordinator) newWorktree(ctx context.Context, branch string, args ...st
 	if err := os.MkdirAll(c.worktreeRoot(), 0755); err != nil {
 		return "", nil, err
 	}
+	if err := ensureCommitIdentity(ctx, main); err != nil {
+		return "", nil, err
+	}
 	cmd := append([]string{"worktree", "add", "-q"}, args[:len(args)-1]...)
 	cmd = append(cmd, dir, args[len(args)-1])
 	if out, err := runCommandCapture(ctx, main, "git", cmd...); err != nil {
@@ -83,4 +87,20 @@ func (c *Coordinator) push(ctx context.Context, branch string, force bool) error
 		return c.Repository.ForcePush(ctx, branch)
 	}
 	return c.Repository.Push(ctx, branch)
+}
+
+// ensureCommitIdentity sets intern's commit identity in the clone's
+// repository config, which every worktree shares. Jobs run git themselves
+// (a developer merging the base branch to resolve a conflict, say) in an
+// environment with no global git config, where commits fail without it.
+func ensureCommitIdentity(ctx context.Context, repo string) error {
+	for key, want := range map[string]string{"user.name": commitAuthorName, "user.email": commitAuthorEmail} {
+		if got, _ := runCommandCapture(ctx, repo, "git", "config", "--local", "--get", key); strings.TrimSpace(got) == want {
+			continue
+		}
+		if out, err := runCommandCapture(ctx, repo, "git", "config", "--local", key, want); err != nil {
+			return fmt.Errorf("set git %s: %w: %s", key, err, out)
+		}
+	}
+	return nil
 }
