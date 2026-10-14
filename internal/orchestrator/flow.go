@@ -230,6 +230,7 @@ func (c *Coordinator) runReview(ctx context.Context, f *Flow) error {
 		Role: runner.RoleReviewer, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(),
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+		Model:  c.modelForChange(ctx, runner.RoleReviewer, f.TicketKey, f.Description, repoRoot, 0),
 	})
 	f.CostUSD += res.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleReviewer, res.Usage.CostUSD)
@@ -308,6 +309,9 @@ func (c *Coordinator) runDeveloperFix(ctx context.Context, f *Flow) error {
 		Role: runner.RoleDeveloper, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(), Feedback: f.Feedback,
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+		// The first fix round keeps the ticket's model; each later one
+		// means the feedback is proving hard, so step up a tier.
+		Model: c.modelFor(runner.RoleDeveloper, f.TicketKey, f.Description, f.FixRounds-1),
 	}, base)
 	f.CostUSD += out.Result.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleDeveloper, out.Result.Usage.CostUSD)
@@ -347,6 +351,7 @@ func (c *Coordinator) runTest(ctx context.Context, f *Flow) error {
 		Role: runner.RoleTester, TicketKey: f.TicketKey, Summary: f.Summary, Description: f.Description,
 		Workdir: repoRoot, BaseBranch: c.baseBranch(),
 		Budget: runner.Budget{MaxCostUSD: c.Cfg.TicketBudgetUSD},
+		Model:  c.modelForChange(ctx, runner.RoleTester, f.TicketKey, f.Description, repoRoot, 0),
 	})
 	f.CostUSD += res.Usage.CostUSD
 	c.recordSpend(ctx, runner.RoleTester, res.Usage.CostUSD)

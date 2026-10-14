@@ -85,8 +85,13 @@ type Config struct {
 	AIRunner string
 	// Claude Code runner settings.
 	ClaudeBinary string // CLI path (default "claude")
-	ClaudeModel  string // --model, e.g. "opus" (default: CLI default)
+	ClaudeModel  string // --model for every job, e.g. "opus"; when set it overrides MODEL_ROUTING
 	ClaudeEffort string // --effort (default: CLI default)
+	// ModelRouting picks each job's model from its role and the ticket's
+	// tier (size, raised by high priority or repeated failures). The
+	// MODEL_ROUTING spec overrides the defaults; see routing.go.
+	ModelRouting     ModelRouting
+	modelRoutingSpec string
 	// RunnerTimeout bounds one runner job, e.g. "45m".
 	RunnerTimeout string
 	// RunnerAllowedCommands are Bash command prefixes the agent may run
@@ -198,6 +203,7 @@ func LoadConfig() (*Config, error) {
 		ClaudeBinary:          viper.GetString("CLAUDE_CODE_BIN"),
 		ClaudeModel:           viper.GetString("CLAUDE_MODEL"),
 		ClaudeEffort:          viper.GetString("CLAUDE_EFFORT"),
+		modelRoutingSpec:      viper.GetString("MODEL_ROUTING"),
 		RunnerTimeout:         viper.GetString("RUNNER_TIMEOUT"),
 		RunnerAllowedCommands: splitList(viper.GetString("RUNNER_ALLOWED_COMMANDS")),
 		Sandbox:               viper.GetString("SANDBOX"),
@@ -297,6 +303,12 @@ func LoadConfig() (*Config, error) {
 		}
 		cfg.AllowedWriteDirs = parts
 	}
+
+	routing, err := ParseModelRouting(cfg.modelRoutingSpec)
+	if err != nil {
+		return nil, errors.NewConfigInvalidError("MODEL_ROUTING", cfg.modelRoutingSpec, err.Error())
+	}
+	cfg.ModelRouting = routing
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err

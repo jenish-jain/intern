@@ -95,6 +95,7 @@ func (c *Coordinator) startTickets(ctx context.Context, tickets []ticketing.Tick
 			}
 		}
 		t := t
+		c.rememberTicket(t.Key, t.Priority, c.State.Attempts(t.Key, fp))
 		ok := c.spawn(t.Key, jobDeveloper, &wg, func() {
 			defer func() {
 				if r := recover(); r != nil {

@@ -46,6 +46,9 @@ type Job struct {
 	// runner supports it (empty starts fresh).
 	SessionID string
 	Budget    Budget
+	// Model overrides the runner's default model for this job (empty uses
+	// the default).
+	Model string
 }
 
 // Status is the outcome a runner reports for a job.

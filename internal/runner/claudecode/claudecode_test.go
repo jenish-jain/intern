@@ -194,3 +194,18 @@ func TestRun_AllowsProjectVerifyCommandsLocally(t *testing.T) {
 		t.Error("compound command must not become an allow rule")
 	}
 }
+
+// A job's own model wins over the runner's default.
+func TestRun_JobModelOverridesDefault(t *testing.T) {
+	bin, argsFile := fakeCLI(t, fixture(t, "success.jsonl"), 0)
+	r := New(Config{Binary: bin, Model: "opus", APIKey: "sk-test", DefaultBudgetUSD: 5})
+	job := devJob(t.TempDir())
+	job.Model = "haiku"
+	if _, err := r.Run(context.Background(), job); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	args := readArgs(t, argsFile)
+	if !strings.Contains(args, "--model\nhaiku") || strings.Contains(args, "--model\nopus") {
+		t.Errorf("want --model haiku only, args:\n%s", args)
+	}
+}
